@@ -128,7 +128,21 @@ Choose one backend:
 
 ### Prerequisites
 
-**libtorch** (for `tch-backend`): Download from [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) (select LibTorch, C++/Java, your platform).
+**libtorch** (for `tch-backend`): Download and extract for your platform:
+
+```bash
+# Linux x86_64 (CPU)
+curl -LO https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
+unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cpu.zip
+
+# Linux ARM64 (CPU)
+curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
+tar xzf libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
+
+# Linux x86_64 (CUDA 12.8)
+curl -LO https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip
+unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip
+```
 
 **FFmpeg** development libraries:
 
@@ -146,14 +160,6 @@ sudo apt-get install libavcodec-dev libavformat-dev libavutil-dev libswresample-
 # Set environment
 export LIBTORCH=$(pwd)/libtorch
 export LIBTORCH_BYPASS_VERSION_CHECK=1
-export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH    # Linux
-export DYLD_LIBRARY_PATH=$LIBTORCH/lib:$DYLD_LIBRARY_PATH  # macOS
-
-# Build (dynamically links FFmpeg)
-cargo build --release
-
-# Build with statically linked FFmpeg
-cargo build --release --features static-ffmpeg
 
 # Build FFmpeg from source and link statically (most self-contained)
 cargo build --release --features build-ffmpeg
