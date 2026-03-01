@@ -10,29 +10,12 @@ Transcribe speech from audio files to text.
 
 - `{baseDir}/scripts/models/Qwen3-ASR-0.6B` — Speech recognition model (0.6B parameters).
 
-## Environment Setup
-
-On Linux, set `LD_LIBRARY_PATH` before running:
-
-```shell
-export LD_LIBRARY_PATH={baseDir}/scripts/libtorch/lib:$LD_LIBRARY_PATH
-```
-
-On macOS, the binary uses the MLX backend and requires no additional environment setup.
-
 ## Transcription
 
 Transcribe an audio file to text.
 
 ```shell
-# macOS (MLX backend — no extra env needed)
 {baseDir}/scripts/asr \
-  {baseDir}/scripts/models/Qwen3-ASR-0.6B \
-  <audio_file>
-
-# Linux
-LD_LIBRARY_PATH={baseDir}/scripts/libtorch/lib:$LD_LIBRARY_PATH \
-  {baseDir}/scripts/asr \
   {baseDir}/scripts/models/Qwen3-ASR-0.6B \
   <audio_file>
 ```
@@ -51,14 +34,7 @@ Prints the transcribed text to standard output.
 ### Example
 
 ```shell
-# macOS
 {baseDir}/scripts/asr \
-  {baseDir}/scripts/models/Qwen3-ASR-0.6B \
-  recording.wav
-
-# Linux
-LD_LIBRARY_PATH={baseDir}/scripts/libtorch/lib:$LD_LIBRARY_PATH \
-  {baseDir}/scripts/asr \
   {baseDir}/scripts/models/Qwen3-ASR-0.6B \
   recording.wav
 ```
@@ -78,16 +54,9 @@ Get the path to the audio file the user wants to transcribe.
 Run the `asr` binary with the full paths to the binary and model directory.
 
 ```shell
-# macOS (MLX backend — no extra env needed)
 {baseDir}/scripts/asr \
   {baseDir}/scripts/models/Qwen3-ASR-0.6B \
-  /path/to/audio.mp3
-
-# Linux (set LD_LIBRARY_PATH for libtorch)
-LD_LIBRARY_PATH={baseDir}/scripts/libtorch/lib:$LD_LIBRARY_PATH \
-  {baseDir}/scripts/asr \
-  {baseDir}/scripts/models/Qwen3-ASR-0.6B \
-  /path/to/audio.mp3
+  /path/to/audio.wav
 ```
 
 ### 3. Return the Transcription

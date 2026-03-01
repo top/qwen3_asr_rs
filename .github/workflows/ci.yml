@@ -71,9 +71,9 @@ jobs:
             tar xzf ${{ matrix.libtorch-archive }}
           fi
 
-      - name: Set linker rpath-link (Linux only)
+      - name: Set linker flags (Linux only)
         if: matrix.backend == 'tch' && runner.os == 'Linux'
-        run: echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,${{ github.workspace }}/libtorch/lib" >> "$GITHUB_ENV"
+        run: echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,${{ github.workspace }}/libtorch/lib -C link-arg=-Wl,-rpath,\$ORIGIN/libtorch/lib" >> "$GITHUB_ENV"
 
       - name: Cap libtorch CPU ISA to AVX2 (x86_64 only)
         if: matrix.backend == 'tch' && runner.arch == 'X64'

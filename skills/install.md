@@ -27,14 +27,7 @@ rm -rf /tmp/qwen3-asr-repo
 After installation, verify it works:
 
 ```bash
-# macOS (MLX backend — no extra env needed)
 ~/.openclaw/skills/audio_asr/scripts/asr \
-  ~/.openclaw/skills/audio_asr/scripts/models/Qwen3-ASR-0.6B \
-  /path/to/audio.wav
-
-# Linux
-LD_LIBRARY_PATH=~/.openclaw/skills/audio_asr/scripts/libtorch/lib:$LD_LIBRARY_PATH \
-  ~/.openclaw/skills/audio_asr/scripts/asr \
   ~/.openclaw/skills/audio_asr/scripts/models/Qwen3-ASR-0.6B \
   /path/to/audio.wav
 ```
@@ -59,7 +52,7 @@ If the automatic download fails, manually install the components:
    - Linux x86_64: https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
    - Linux aarch64: https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
 
-   macOS does not need libtorch — the binary uses the MLX backend natively.
+   The binary has an embedded rpath to find `libtorch/lib` relative to itself, so no `LD_LIBRARY_PATH` is needed. macOS does not need libtorch.
 5. Download model:
    ```bash
    huggingface-cli download Qwen/Qwen3-ASR-0.6B \
@@ -99,11 +92,13 @@ Supported: Linux (x86_64, aarch64) and macOS (Apple Silicon arm64).
 
 ### Missing libtorch (Linux only)
 
-Ensure the library path includes the libtorch lib directory:
+Ensure libtorch is extracted in the same directory as the `asr` binary:
 
-```bash
-export LD_LIBRARY_PATH=~/.openclaw/skills/audio_asr/scripts/libtorch/lib:$LD_LIBRARY_PATH
+```
+scripts/
+├── asr
+└── libtorch/
+    └── lib/
 ```
 
-The SKILL.md instructions set this automatically when running commands.
 macOS does not need libtorch.

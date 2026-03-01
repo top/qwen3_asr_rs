@@ -48,7 +48,11 @@ unzip asr-linux-aarch64.zip
 
 macOS uses the MLX backend and does not need libtorch.
 
+Download and extract libtorch into the same directory as the `asr` binary (the binary has an embedded rpath to find `libtorch/lib` relative to itself):
+
 ```bash
+cd asr-linux-x86_64  # or asr-linux-x86_64-cuda, asr-linux-aarch64
+
 # Linux x86_64 (CPU)
 curl -LO https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
 unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cpu.zip
@@ -60,6 +64,8 @@ unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip
 # Linux ARM64
 curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
 tar xzf libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
+
+cd ..
 ```
 
 ### 3. Download model weights
@@ -79,12 +85,11 @@ tok.backend_tokenizer.save('Qwen3-ASR-0.6B/tokenizer.json')
 ### 4. Transcribe
 
 ```bash
-# macOS (MLX backend — no extra env needed)
+# macOS
 ./asr-macos-aarch64/asr Qwen3-ASR-0.6B input.wav
 
 # Linux
-LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH \
-  ./asr-linux-x86_64/asr Qwen3-ASR-0.6B input.wav
+./asr-linux-x86_64/asr Qwen3-ASR-0.6B input.wav
 ```
 
 Output:
