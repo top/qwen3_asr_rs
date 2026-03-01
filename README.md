@@ -172,10 +172,7 @@ cargo build --release --features build-ffmpeg
 git submodule update --init --recursive
 
 # Build with MLX (no libtorch needed)
-cargo build --release --no-default-features --features mlx
-
-# With statically linked FFmpeg
-cargo build --release --no-default-features --features mlx,static-ffmpeg
+cargo build --release --no-default-features --features mlx,build-ffmpeg
 ```
 
 ## Project Structure
