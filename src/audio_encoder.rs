@@ -236,7 +236,7 @@ impl AudioEncoder {
             );
             // where(allow, 0, -inf)
             let mask = Tensor::from_tch(
-                allow_mask.as_tch().where_self(&zero.into_tch(), &neg_inf.into_tch())
+                zero.into_tch().where_self(&allow_mask.as_tch(), &neg_inf.into_tch())
             );
             Some(mask)
         }
