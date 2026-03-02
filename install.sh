@@ -88,7 +88,7 @@ resolve_asset() {
                 echo ""
 
                 local choice
-                read -r -p "Select variant [1]: " choice
+                read -r -p "Select variant [1]: " choice </dev/tty
                 choice="${choice:-1}"
 
                 case "$choice" in
@@ -194,7 +194,7 @@ choose_model() {
     echo ""
 
     local choice
-    read -r -p "Select model [1]: " choice
+    read -r -p "Select model [1]: " choice </dev/tty
     choice="${choice:-1}"
 
     case "$choice" in
