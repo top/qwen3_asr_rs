@@ -28,10 +28,10 @@ Once complete, run your first transcription with the command shown by the instal
 ./asr-macos-aarch64/asr asr-macos-aarch64/Qwen3-ASR-0.6B asr-macos-aarch64/sample.wav
 
 # Linux (CPU)
-LD_LIBRARY_PATH=./asr-linux-x86_64/libtorch/lib ./asr-linux-x86_64/asr asr-linux-x86_64/Qwen3-ASR-0.6B asr-linux-x86_64/sample.wav
+./asr-linux-x86_64/asr asr-linux-x86_64/Qwen3-ASR-0.6B asr-linux-x86_64/sample.wav
 
 # Linux (CUDA)
-LD_LIBRARY_PATH=./asr-linux-x86_64-cuda/libtorch/lib ./asr-linux-x86_64-cuda/asr asr-linux-x86_64-cuda/Qwen3-ASR-0.6B asr-linux-x86_64-cuda/sample.wav
+./asr-linux-x86_64-cuda/asr asr-linux-x86_64-cuda/Qwen3-ASR-0.6B asr-linux-x86_64-cuda/sample.wav
 ```
 
 Output:

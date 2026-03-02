@@ -271,15 +271,10 @@ print_usage() {
     echo ""
 
     local run_cmd="./${ASSET_NAME}/asr"
-    local prefix=""
-
-    if [ "$OS" = "linux" ]; then
-        prefix="LD_LIBRARY_PATH=./${ASSET_NAME}/libtorch/lib "
-    fi
 
     echo "Run your first transcription:"
     echo ""
-    echo -e "  ${CYAN}${prefix}${run_cmd} ${ASSET_NAME}/${MODEL} ${ASSET_NAME}/sample.wav${NC}"
+    echo -e "  ${CYAN}${run_cmd} ${ASSET_NAME}/${MODEL} ${ASSET_NAME}/sample.wav${NC}"
     echo ""
     echo "Expected output:"
     echo ""
@@ -288,7 +283,7 @@ print_usage() {
     echo ""
     echo "To transcribe your own files:"
     echo ""
-    echo -e "  ${CYAN}${prefix}${run_cmd} ${ASSET_NAME}/${MODEL} /path/to/audio.wav${NC}"
+    echo -e "  ${CYAN}${run_cmd} ${ASSET_NAME}/${MODEL} /path/to/audio.wav${NC}"
     echo ""
 }
 
