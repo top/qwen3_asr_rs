@@ -48,15 +48,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.backend }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ matrix.backend }}-cargo-registry-
+      - name: Clean build state
+        run: rm -f Cargo.lock && cargo clean
 
       - name: Download libtorch
         if: matrix.backend == 'tch'
@@ -108,12 +101,6 @@ jobs:
         if: matrix.backend == 'tch' && runner.os == 'macOS'
         run: echo "DYLD_LIBRARY_PATH=${{ github.workspace }}/libtorch/lib:$DYLD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
-      - name: Cache 0.6B model weights
-        uses: actions/cache@v4
-        with:
-          path: Qwen3-ASR-0.6B
-          key: qwen3-asr-0.6b-v1
-
       - name: Download 0.6B model
         run: python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ASR-0.6B', local_dir='Qwen3-ASR-0.6B')"
 
@@ -134,12 +121,6 @@ jobs:
 
       - name: "[0.6B] Transcribe sample3 (Chinese)"
         run: ./target/release/asr Qwen3-ASR-0.6B test_audio/sample3.wav
-
-      - name: Cache 1.7B model weights
-        uses: actions/cache@v4
-        with:
-          path: Qwen3-ASR-1.7B
-          key: qwen3-asr-1.7b-v1
 
       - name: Download 1.7B model
         run: python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-ASR-1.7B', local_dir='Qwen3-ASR-1.7B')"

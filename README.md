@@ -116,18 +116,40 @@ Qwen3-ASR supports 30 languages: Chinese, English, Cantonese, Arabic, German, Fr
 
 ## Build from Source
 
-### Backend
-
-Choose one backend:
-
-| Backend | Feature flag | Platforms | GPU |
-|---------|-------------|-----------|-----|
-| libtorch | `tch-backend` (default) | Linux, macOS, Windows | CUDA |
-| MLX | `mlx` | macOS Apple Silicon | Metal |
-
 ### Prerequisites
 
-**libtorch** (for `tch-backend`): Download and extract for your platform:
+Download model weights and generate the tokenizer:
+
+```bash
+pip install huggingface_hub transformers
+
+huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir Qwen3-ASR-0.6B
+
+python -c "
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained('Qwen3-ASR-0.6B', trust_remote_code=True)
+tok.backend_tokenizer.save('Qwen3-ASR-0.6B/tokenizer.json')
+"
+```
+
+### Build for macOS (MLX)
+
+Install dependencies:
+
+```bash
+brew install ffmpeg
+```
+
+Build:
+
+```bash
+git submodule update --init --recursive
+cargo build --release --no-default-features --features mlx,build-ffmpeg
+```
+
+### Build for Linux (libtorch)
+
+Download and extract libtorch for your platform:
 
 ```bash
 # Linux x86_64 (CPU)
@@ -143,35 +165,18 @@ curl -LO https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-w
 unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip
 ```
 
-**FFmpeg** development libraries:
+Set environment variables:
 
 ```bash
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt-get install libavcodec-dev libavformat-dev libavutil-dev libswresample-dev pkg-config
-```
-
-### libtorch backend (default)
-
-```bash
-# Set environment
 export LIBTORCH=$(pwd)/libtorch
 export LIBTORCH_BYPASS_VERSION_CHECK=1
-
-# Build FFmpeg from source and link statically (most self-contained)
-cargo build --release --features build-ffmpeg
 ```
 
-### MLX backend (macOS Apple Silicon)
+Install dependencies and build:
 
 ```bash
-# Initialize mlx-c submodule
-git submodule update --init --recursive
-
-# Build with MLX (no libtorch needed)
-cargo build --release --no-default-features --features mlx,build-ffmpeg
+sudo apt-get install -y nasm pkg-config
+cargo build --release --features build-ffmpeg
 ```
 
 ## Project Structure
