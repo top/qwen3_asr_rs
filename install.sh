@@ -217,14 +217,28 @@ download_model() {
         return
     fi
 
-    # Ensure huggingface-cli is available
-    if ! command -v huggingface-cli &>/dev/null; then
-        info "Installing huggingface_hub ..."
-        pip install -q huggingface_hub
+    mkdir -p "${MODEL_DIR}"
+    local base_url="https://huggingface.co/Qwen/${MODEL}/resolve/main"
+
+    # Files needed at runtime: config.json + safetensors weights
+    # (tokenizer.json is copied separately from release assets)
+    local files="config.json"
+    if [ "$MODEL" = "Qwen3-ASR-0.6B" ]; then
+        files="$files model.safetensors"
+    else
+        # 1.7B uses sharded weights
+        files="$files model.safetensors.index.json model-00001-of-00002.safetensors model-00002-of-00002.safetensors"
     fi
 
     info "Downloading ${MODEL} from HuggingFace (this may take a while) ..."
-    huggingface-cli download "Qwen/${MODEL}" --local-dir "${MODEL_DIR}"
+    for f in $files; do
+        if [ -f "${MODEL_DIR}/${f}" ]; then
+            ok "${f} already exists — skipping."
+        else
+            info "  Downloading ${f} ..."
+            curl -fSL -o "${MODEL_DIR}/${f}" "${base_url}/${f}"
+        fi
+    done
     ok "Model downloaded to ${MODEL_DIR}/"
 }
 
