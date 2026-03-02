@@ -5,7 +5,41 @@ on:
     types: [published]
 
 jobs:
+  tokenizers:
+    runs-on: ubuntu-latest
+    name: Generate tokenizers
+    steps:
+      - name: Install transformers
+        run: pip install -q transformers
+
+      - name: Generate 0.6B tokenizer
+        run: |
+          python3 -c "
+          from transformers import AutoTokenizer
+          tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-ASR-0.6B', trust_remote_code=True)
+          tok.backend_tokenizer.save('tokenizer-0.6B.json')
+          print('Saved tokenizer-0.6B.json')
+          "
+
+      - name: Generate 1.7B tokenizer
+        run: |
+          python3 -c "
+          from transformers import AutoTokenizer
+          tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-ASR-1.7B', trust_remote_code=True)
+          tok.backend_tokenizer.save('tokenizer-1.7B.json')
+          print('Saved tokenizer-1.7B.json')
+          "
+
+      - name: Upload tokenizer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenizers
+          path: |
+            tokenizer-0.6B.json
+            tokenizer-1.7B.json
+
   build:
+    needs: tokenizers
     strategy:
       fail-fast: false
       matrix:
@@ -89,10 +123,17 @@ jobs:
         if: matrix.backend == 'mlx'
         run: cargo build --release --no-default-features --features mlx,build-ffmpeg
 
+      - name: Download tokenizers
+        uses: actions/download-artifact@v4
+        with:
+          name: tokenizers
+          path: tokenizers
+
       - name: Package release
         run: |
           mkdir ${{ matrix.asset-name }}
           cp target/release/asr ${{ matrix.asset-name }}/asr
+          cp -r tokenizers ${{ matrix.asset-name }}/tokenizers
           if [ "${{ matrix.backend }}" = "mlx" ]; then
             cp target/release/build/qwen3_asr-*/out/lib/mlx.metallib ${{ matrix.asset-name }}/
           fi

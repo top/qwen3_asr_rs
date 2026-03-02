@@ -228,26 +228,26 @@ download_model() {
     ok "Model downloaded to ${MODEL_DIR}/"
 }
 
-# ── Generate tokenizer ───────────────────────────────────────────────
-generate_tokenizer() {
+# ── Copy pre-built tokenizer ─────────────────────────────────────────
+install_tokenizer() {
     if [ -f "${MODEL_DIR}/tokenizer.json" ]; then
         ok "tokenizer.json already exists — skipping."
         return
     fi
 
-    # Ensure transformers is available
-    if ! python3 -c "import transformers" &>/dev/null; then
-        info "Installing transformers ..."
-        pip install -q transformers
+    # Determine model size suffix (0.6B or 1.7B)
+    local size
+    size=$(echo "$MODEL" | grep -oE '[0-9]+\.[0-9]+B')
+    local src="${INSTALL_DIR}/tokenizers/tokenizer-${size}.json"
+
+    if [ ! -f "$src" ]; then
+        err "Pre-built tokenizer not found at ${src}"
+        exit 1
     fi
 
-    info "Generating tokenizer.json ..."
-    python3 -c "
-from transformers import AutoTokenizer
-tok = AutoTokenizer.from_pretrained('${MODEL_DIR}', trust_remote_code=True)
-tok.backend_tokenizer.save('${MODEL_DIR}/tokenizer.json')
-"
-    ok "Tokenizer saved to ${MODEL_DIR}/tokenizer.json"
+    info "Copying pre-built tokenizer ..."
+    cp "$src" "${MODEL_DIR}/tokenizer.json"
+    ok "Tokenizer installed to ${MODEL_DIR}/tokenizer.json"
 }
 
 # ── Download sample audio ────────────────────────────────────────────
@@ -302,7 +302,7 @@ main() {
     setup_libtorch
     choose_model
     download_model
-    generate_tokenizer
+    install_tokenizer
     download_sample
     print_usage
 }
