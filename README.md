@@ -13,58 +13,25 @@ Learn more:
 
 ## Quick Start
 
-### 1. Download the release
-
-Download the latest release for your platform from [GitHub Releases](https://github.com/second-state/qwen3_asr_rs/releases/latest) and extract. Each zip contains the `asr` binary and all required runtime dependencies (libtorch for Linux, mlx.metallib for macOS).
-
-**macOS (Apple Silicon)**
+The install script automatically detects your platform (macOS/Linux, CPU/CUDA GPU), downloads the correct release binary, model weights, and a sample audio file:
 
 ```bash
-curl -LO https://github.com/second-state/qwen3_asr_rs/releases/latest/download/asr-macos-aarch64.zip
-unzip asr-macos-aarch64.zip
-# Contains: asr-macos-aarch64/asr, asr-macos-aarch64/mlx.metallib
+curl -sSf https://raw.githubusercontent.com/second-state/qwen3_asr_rs/main/install.sh | bash
 ```
 
-**Linux x86_64 (CPU)**
+The installer will prompt you to choose a model size (0.6B recommended) and, on Linux with an NVIDIA GPU, whether to use CUDA or CPU.
 
-```bash
-curl -LO https://github.com/second-state/qwen3_asr_rs/releases/latest/download/asr-linux-x86_64.zip
-unzip asr-linux-x86_64.zip
-# Contains: asr-linux-x86_64/asr, asr-linux-x86_64/libtorch/
-```
-
-**Linux ARM64**
-
-```bash
-curl -LO https://github.com/second-state/qwen3_asr_rs/releases/latest/download/asr-linux-aarch64.zip
-unzip asr-linux-aarch64.zip
-# Contains: asr-linux-aarch64/asr, asr-linux-aarch64/libtorch/
-```
-
-> **CUDA GPU**: Pre-built releases use CPU libtorch. For CUDA acceleration, download the [CUDA 12.8 libtorch](#libtorch-backend-default) and [build from source](#build-from-source).
-
-### 2. Download model weights
-
-```bash
-pip install huggingface_hub transformers
-
-huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir Qwen3-ASR-0.6B
-
-python -c "
-from transformers import AutoTokenizer
-tok = AutoTokenizer.from_pretrained('Qwen3-ASR-0.6B', trust_remote_code=True)
-tok.backend_tokenizer.save('Qwen3-ASR-0.6B/tokenizer.json')
-"
-```
-
-### 3. Transcribe
+Once complete, run your first transcription with the command shown by the installer:
 
 ```bash
 # macOS
-./asr-macos-aarch64/asr Qwen3-ASR-0.6B input.wav
+./asr-macos-aarch64/asr asr-macos-aarch64/Qwen3-ASR-0.6B asr-macos-aarch64/sample.wav
 
-# Linux
-./asr-linux-x86_64/asr Qwen3-ASR-0.6B input.wav
+# Linux (CPU)
+LD_LIBRARY_PATH=./asr-linux-x86_64/libtorch/lib ./asr-linux-x86_64/asr asr-linux-x86_64/Qwen3-ASR-0.6B asr-linux-x86_64/sample.wav
+
+# Linux (CUDA)
+LD_LIBRARY_PATH=./asr-linux-x86_64-cuda/libtorch/lib ./asr-linux-x86_64-cuda/asr asr-linux-x86_64-cuda/Qwen3-ASR-0.6B asr-linux-x86_64-cuda/sample.wav
 ```
 
 Output:

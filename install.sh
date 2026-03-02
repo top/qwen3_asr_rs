@@ -1,0 +1,314 @@
+#!/bin/bash
+# install.sh — One-step installer for Qwen3-ASR Rust CLI
+# Downloads the release binary, model weights, and a sample audio file.
+
+set -e
+
+REPO="second-state/qwen3_asr_rs"
+SAMPLE_WAV_URL="https://github.com/${REPO}/raw/main/test_audio/sample1.wav"
+
+# libtorch download URLs
+LIBTORCH_CPU_X86_64_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip"
+LIBTORCH_CPU_AARCH64_URL="https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz"
+LIBTORCH_CUDA_X86_64_URL="https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip"
+
+# ── colours / helpers ────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+info()  { echo -e "${CYAN}[info]${NC}  $*"; }
+ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
+warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
+err()   { echo -e "${RED}[error]${NC} $*" >&2; }
+
+# ── 1. Detect platform ──────────────────────────────────────────────
+detect_platform() {
+    local os arch cuda=""
+
+    case "$(uname -s)" in
+        Linux*)  os="linux"  ;;
+        Darwin*) os="macos"  ;;
+        *)
+            err "Unsupported OS: $(uname -s)"
+            exit 1
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64|amd64)    arch="x86_64"  ;;
+        aarch64|arm64)   arch="aarch64" ;;
+        *)
+            err "Unsupported architecture: $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+    # CUDA detection (Linux only — macOS uses Metal via MLX)
+    if [ "$os" = "linux" ]; then
+        if command -v nvidia-smi &>/dev/null; then
+            cuda=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+        fi
+    fi
+
+    OS="$os"
+    ARCH="$arch"
+    CUDA_DRIVER="$cuda"
+}
+
+print_platform() {
+    echo ""
+    info "System detection"
+    echo "  OS:           ${OS}"
+    echo "  CPU:          ${ARCH}"
+
+    if [ "$OS" = "macos" ]; then
+        echo "  GPU:          Apple Silicon (Metal via MLX)"
+    elif [ -n "$CUDA_DRIVER" ]; then
+        local gpu_name
+        gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "NVIDIA GPU")
+        echo "  GPU:          ${gpu_name} (CUDA driver ${CUDA_DRIVER})"
+    else
+        echo "  GPU:          None detected"
+    fi
+    echo ""
+}
+
+# ── 2. Map platform → release asset ─────────────────────────────────
+resolve_asset() {
+    USE_CUDA="false"
+
+    case "${OS}-${ARCH}" in
+        macos-aarch64)  ASSET_NAME="asr-macos-aarch64"  ;;
+        linux-x86_64)
+            # If CUDA GPU detected, offer the CUDA build
+            if [ -n "$CUDA_DRIVER" ]; then
+                echo ""
+                info "NVIDIA GPU detected. Choose build variant:"
+                echo "  1) CUDA 12.8  (recommended for GPU)"
+                echo "  2) CPU only"
+                echo ""
+
+                local choice
+                read -r -p "Select variant [1]: " choice
+                choice="${choice:-1}"
+
+                case "$choice" in
+                    1) USE_CUDA="true";  ASSET_NAME="asr-linux-x86_64-cuda" ;;
+                    2) USE_CUDA="false"; ASSET_NAME="asr-linux-x86_64" ;;
+                    *)
+                        warn "Invalid choice '${choice}', defaulting to CUDA."
+                        USE_CUDA="true"; ASSET_NAME="asr-linux-x86_64-cuda"
+                        ;;
+                esac
+            else
+                ASSET_NAME="asr-linux-x86_64"
+            fi
+            ;;
+        linux-aarch64)  ASSET_NAME="asr-linux-aarch64"   ;;
+        macos-x86_64)
+            err "macOS x86_64 (Intel) is not supported. Apple Silicon required."
+            exit 1
+            ;;
+        *)
+            err "No pre-built release for ${OS}-${ARCH}."
+            exit 1
+            ;;
+    esac
+}
+
+# ── 3. Download & extract release ────────────────────────────────────
+download_release() {
+    local zip_name="${ASSET_NAME}.zip"
+    local download_url="https://github.com/${REPO}/releases/latest/download/${zip_name}"
+
+    if [ -d "${ASSET_NAME}" ]; then
+        ok "${ASSET_NAME}/ already exists — skipping download."
+        return
+    fi
+
+    info "Downloading ${zip_name} ..."
+    curl -fSL -o "${zip_name}" "${download_url}"
+    info "Extracting ..."
+    unzip -q "${zip_name}"
+    rm -f "${zip_name}"
+    ok "Release extracted to ${ASSET_NAME}/"
+}
+
+# ── 4. Download libtorch (Linux only) ────────────────────────────────
+setup_libtorch() {
+    # Only needed on Linux — macOS uses MLX
+    if [ "$OS" != "linux" ]; then
+        return
+    fi
+
+    local libtorch_dir="${ASSET_NAME}/libtorch"
+
+    # CPU release zips bundle libtorch; CUDA release zips do not.
+    if [ -d "$libtorch_dir" ] && [ -d "$libtorch_dir/lib" ]; then
+        ok "libtorch already present (bundled in release)."
+        return
+    fi
+
+    # Determine which libtorch to download
+    local url archive label
+    if [ "$USE_CUDA" = "true" ]; then
+        url="$LIBTORCH_CUDA_X86_64_URL"
+        archive="libtorch-cuda.zip"
+        label="CUDA 12.8"
+        info "Downloading CUDA 12.8 libtorch (this is a large download) ..."
+    elif [ "$ARCH" = "x86_64" ]; then
+        url="$LIBTORCH_CPU_X86_64_URL"
+        archive="libtorch-cpu.zip"
+        label="CPU (x86_64)"
+        info "Downloading CPU libtorch for x86_64 ..."
+    else
+        url="$LIBTORCH_CPU_AARCH64_URL"
+        archive="libtorch-cpu.tar.gz"
+        label="CPU (aarch64)"
+        info "Downloading CPU libtorch for aarch64 ..."
+    fi
+
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    curl -fSL -o "${temp_dir}/${archive}" "$url"
+    info "Extracting libtorch ..."
+
+    if [[ "$archive" == *.zip ]]; then
+        unzip -q "${temp_dir}/${archive}" -d "${temp_dir}"
+    else
+        tar xzf "${temp_dir}/${archive}" -C "${temp_dir}"
+    fi
+
+    mv "${temp_dir}/libtorch" "$libtorch_dir"
+    rm -rf "$temp_dir"
+
+    ok "${label} libtorch installed to ${libtorch_dir}/"
+}
+
+choose_model() {
+    echo ""
+    info "Available models:"
+    echo "  1) Qwen3-ASR-0.6B  (recommended — ~1.2 GB download)"
+    echo "  2) Qwen3-ASR-1.7B  (~3.5 GB download)"
+    echo ""
+
+    local choice
+    read -r -p "Select model [1]: " choice
+    choice="${choice:-1}"
+
+    case "$choice" in
+        1) MODEL="Qwen3-ASR-0.6B" ;;
+        2) MODEL="Qwen3-ASR-1.7B" ;;
+        *)
+            warn "Invalid choice '${choice}', defaulting to 0.6B."
+            MODEL="Qwen3-ASR-0.6B"
+            ;;
+    esac
+
+    MODEL_DIR="${ASSET_NAME}/${MODEL}"
+    info "Selected model: ${MODEL}"
+}
+
+# ── Download model weights ───────────────────────────────────────────
+download_model() {
+    if [ -d "${MODEL_DIR}" ] && [ -f "${MODEL_DIR}/config.json" ]; then
+        ok "Model ${MODEL} already downloaded — skipping."
+        return
+    fi
+
+    # Ensure huggingface-cli is available
+    if ! command -v huggingface-cli &>/dev/null; then
+        info "Installing huggingface_hub ..."
+        pip install -q huggingface_hub
+    fi
+
+    info "Downloading ${MODEL} from HuggingFace (this may take a while) ..."
+    huggingface-cli download "Qwen/${MODEL}" --local-dir "${MODEL_DIR}"
+    ok "Model downloaded to ${MODEL_DIR}/"
+}
+
+# ── Generate tokenizer ───────────────────────────────────────────────
+generate_tokenizer() {
+    if [ -f "${MODEL_DIR}/tokenizer.json" ]; then
+        ok "tokenizer.json already exists — skipping."
+        return
+    fi
+
+    # Ensure transformers is available
+    if ! python3 -c "import transformers" &>/dev/null; then
+        info "Installing transformers ..."
+        pip install -q transformers
+    fi
+
+    info "Generating tokenizer.json ..."
+    python3 -c "
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained('${MODEL_DIR}', trust_remote_code=True)
+tok.backend_tokenizer.save('${MODEL_DIR}/tokenizer.json')
+"
+    ok "Tokenizer saved to ${MODEL_DIR}/tokenizer.json"
+}
+
+# ── Download sample audio ────────────────────────────────────────────
+download_sample() {
+    local dest="${ASSET_NAME}/sample.wav"
+
+    if [ -f "${dest}" ]; then
+        ok "sample.wav already exists — skipping."
+        return
+    fi
+
+    info "Downloading sample audio file ..."
+    curl -fSL -o "${dest}" "${SAMPLE_WAV_URL}"
+    ok "Sample saved to ${dest}"
+}
+
+# ── Print usage instructions ─────────────────────────────────────────
+print_usage() {
+    echo ""
+    echo -e "${GREEN}============================================${NC}"
+    echo -e "${GREEN} Installation complete!${NC}"
+    echo -e "${GREEN}============================================${NC}"
+    echo ""
+
+    local run_cmd="./${ASSET_NAME}/asr"
+    local prefix=""
+
+    if [ "$OS" = "linux" ]; then
+        prefix="LD_LIBRARY_PATH=./${ASSET_NAME}/libtorch/lib "
+    fi
+
+    echo "Run your first transcription:"
+    echo ""
+    echo -e "  ${CYAN}${prefix}${run_cmd} ${ASSET_NAME}/${MODEL} ${ASSET_NAME}/sample.wav${NC}"
+    echo ""
+    echo "Expected output:"
+    echo ""
+    echo "  Language: English"
+    echo "  Text: Thank you for your contribution to the most recent issue of Computer."
+    echo ""
+    echo "To transcribe your own files:"
+    echo ""
+    echo -e "  ${CYAN}${prefix}${run_cmd} ${ASSET_NAME}/${MODEL} /path/to/audio.wav${NC}"
+    echo ""
+}
+
+# ── main ─────────────────────────────────────────────────────────────
+main() {
+    echo ""
+    echo "╔══════════════════════════════════════╗"
+    echo "║     Qwen3-ASR Installer              ║"
+    echo "╚══════════════════════════════════════╝"
+
+    detect_platform
+    print_platform
+    resolve_asset
+    download_release
+    setup_libtorch
+    choose_model
+    download_model
+    generate_tokenizer
+    download_sample
+    print_usage
+}
+
+main "$@"

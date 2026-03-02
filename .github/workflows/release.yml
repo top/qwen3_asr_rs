@@ -16,12 +16,21 @@ jobs:
             asset-name: asr-linux-x86_64
             libtorch-url: https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
             libtorch-archive: libtorch.zip
+            bundle-libtorch: true
+          - os: ubuntu-latest
+            name: Linux x86_64 (CUDA)
+            backend: tch
+            asset-name: asr-linux-x86_64-cuda
+            libtorch-url: https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip
+            libtorch-archive: libtorch.zip
+            bundle-libtorch: false
           - os: ubuntu-24.04-arm
             name: Linux ARM64
             backend: tch
             asset-name: asr-linux-aarch64
             libtorch-url: https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
             libtorch-archive: libtorch.tar.gz
+            bundle-libtorch: true
           - os: macos-latest
             name: macOS ARM64
             backend: mlx
@@ -87,7 +96,7 @@ jobs:
           if [ "${{ matrix.backend }}" = "mlx" ]; then
             cp target/release/build/qwen3_asr-*/out/lib/mlx.metallib ${{ matrix.asset-name }}/
           fi
-          if [ "${{ matrix.backend }}" = "tch" ]; then
+          if [ "${{ matrix.bundle-libtorch }}" = "true" ]; then
             cp -r libtorch ${{ matrix.asset-name }}/libtorch
           fi
           zip -r ${{ matrix.asset-name }}.zip ${{ matrix.asset-name }}
