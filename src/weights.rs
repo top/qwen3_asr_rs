@@ -61,9 +61,13 @@ fn load_sharded_safetensors(index_path: &Path, device: Device) -> Result<HashMap
 #[cfg(feature = "tch-backend")]
 pub fn load_safetensors(path: &Path, device: Device) -> Result<HashMap<String, Tensor>> {
     let tch_device = tch::Device::from(device);
-    let data =
-        std::fs::read(path).with_context(|| format!("Failed to read safetensors: {:?}", path))?;
-    let tensors = safetensors::SafeTensors::deserialize(&data)
+
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open safetensors: {:?}", path))?;
+    let mmap = unsafe { memmap2::MmapOptions::new().map(&file) }
+        .with_context(|| format!("Failed to mmap safetensors: {:?}", path))?;
+
+    let tensors = safetensors::SafeTensors::deserialize(&mmap)
         .with_context(|| format!("Failed to deserialize safetensors: {:?}", path))?;
 
     let mut result = HashMap::new();
@@ -72,42 +76,26 @@ pub fn load_safetensors(path: &Path, device: Device) -> Result<HashMap<String, T
         let shape: Vec<i64> = view.shape().iter().map(|&s| s as i64).collect();
         let tensor = match view.dtype() {
             safetensors::Dtype::BF16 => {
-                let f32_data = bf16_bytes_to_f32(view.data());
                 Tensor::from_tch(
-                    tch::Tensor::from_slice(&f32_data)
-                        .reshape(&shape)
+                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::BFloat16)
                         .to_device(tch_device),
                 )
             }
             safetensors::Dtype::F16 => {
-                let f32_data = f16_bytes_to_f32(view.data());
                 Tensor::from_tch(
-                    tch::Tensor::from_slice(&f32_data)
-                        .reshape(&shape)
+                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Half)
                         .to_device(tch_device),
                 )
             }
             safetensors::Dtype::F32 => {
-                let f32_data: Vec<f32> = view
-                    .data()
-                    .chunks(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
                 Tensor::from_tch(
-                    tch::Tensor::from_slice(&f32_data)
-                        .reshape(&shape)
+                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Float)
                         .to_device(tch_device),
                 )
             }
             safetensors::Dtype::I64 => {
-                let i64_data: Vec<i64> = view
-                    .data()
-                    .chunks(8)
-                    .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-                    .collect();
                 Tensor::from_tch(
-                    tch::Tensor::from_slice(&i64_data)
-                        .reshape(&shape)
+                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Int64)
                         .to_device(tch_device),
                 )
             }
@@ -130,55 +118,6 @@ pub fn load_safetensors(path: &Path, _device: Device) -> Result<HashMap<String, 
         .collect())
 }
 
-#[cfg(feature = "tch-backend")]
-fn bf16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks(2)
-        .map(|chunk| {
-            let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
-            f32::from_bits((bits as u32) << 16)
-        })
-        .collect()
-}
-
-#[cfg(feature = "tch-backend")]
-fn f16_bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks(2)
-        .map(|chunk| {
-            let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
-            half_to_float(bits)
-        })
-        .collect()
-}
-
-#[cfg(feature = "tch-backend")]
-fn half_to_float(half: u16) -> f32 {
-    let sign = ((half >> 15) & 1) as u32;
-    let exponent = ((half >> 10) & 0x1F) as u32;
-    let mantissa = (half & 0x3FF) as u32;
-
-    if exponent == 0 {
-        if mantissa == 0 {
-            f32::from_bits(sign << 31)
-        } else {
-            let mut e = exponent;
-            let mut m = mantissa;
-            while (m & 0x400) == 0 {
-                m <<= 1;
-                e = e.wrapping_sub(1);
-            }
-            m &= 0x3FF;
-            let e = (127u32 - 15 + 1).wrapping_add(e);
-            f32::from_bits((sign << 31) | (e << 23) | (m << 13))
-        }
-    } else if exponent == 31 {
-        f32::from_bits((sign << 31) | (0xFF << 23) | (mantissa << 13))
-    } else {
-        let e = exponent + (127 - 15);
-        f32::from_bits((sign << 31) | (e << 23) | (mantissa << 13))
-    }
-}
 
 /// Get a tensor from the weights map with a given prefix and suffix.
 pub fn get_weight(

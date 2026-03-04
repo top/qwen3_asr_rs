@@ -140,6 +140,22 @@ impl Clone for Tensor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Context Management
+// ---------------------------------------------------------------------------
+
+pub fn no_grad<T, F: FnOnce() -> T>(f: F) -> T {
+    #[cfg(feature = "tch-backend")]
+    {
+        tch::no_grad(f)
+    }
+    #[cfg(feature = "mlx")]
+    {
+        // MLX doesn't construct graphs eagerly, no-op needed
+        f()
+    }
+}
+
 // ===== tch backend implementation =====
 
 #[cfg(feature = "tch-backend")]
@@ -442,7 +458,6 @@ impl Tensor {
             normalized,
             onesided,
             return_complex,
-            false,
         ))
     }
 

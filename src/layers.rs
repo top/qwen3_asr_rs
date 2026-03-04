@@ -50,7 +50,7 @@ impl RmsNorm {
         let x = x.to_dtype(DType::Float32);
         let variance = (&x * &x).mean_dim(&[-1], true);
         let x = &x * (&variance + self.eps).rsqrt();
-        (x * &self.weight).to_dtype(dtype)
+        (x * &self.weight.to_dtype(DType::Float32)).to_dtype(dtype)
     }
 }
 
@@ -162,10 +162,11 @@ impl AudioAttention {
         let mut attn = q.matmul(&k.transpose(-2, -1)) / scale;
 
         if let Some(m) = mask {
-            attn = attn + m;
+            let kind = attn.kind();
+            attn = attn + m.to_dtype(kind);
         }
 
-        let attn = attn.softmax(-1).to_dtype(DType::Float32);
+        let attn = attn.softmax(-1).to_dtype(x.kind());
         let out = attn.matmul(&v); // (bsz, nh, seq_len, hd)
         let out = out.permute(&[0, 2, 1, 3]).reshape(&[bsz, seq_len, nh * hd]);
         self.out_proj.forward(&out)
@@ -328,7 +329,8 @@ impl TextAttention {
         let mut attn_weights = q.matmul(&k.transpose(-2, -1)) / scale;
 
         if let Some(m) = mask {
-            attn_weights = attn_weights + m;
+            let kind = attn_weights.kind();
+            attn_weights = attn_weights + m.to_dtype(kind);
         }
 
         let attn_weights = attn_weights.softmax(-1).to_dtype(x.kind());
@@ -359,8 +361,8 @@ fn repeat_kv(x: &Tensor, n_rep: usize) -> Tensor {
 
 /// Apply rotary position embeddings.
 fn apply_rotary_emb(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Tensor {
-    let cos = cos.unsqueeze(0).unsqueeze(0);
-    let sin = sin.unsqueeze(0).unsqueeze(0);
+    let cos = cos.unsqueeze(0).unsqueeze(0).to_dtype(x.kind());
+    let sin = sin.unsqueeze(0).unsqueeze(0).to_dtype(x.kind());
 
     let x_rotated = rotate_half(x);
     x * &cos + x_rotated * &sin

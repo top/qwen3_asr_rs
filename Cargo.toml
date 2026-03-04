@@ -10,7 +10,7 @@ name = "asr"
 path = "src/main.rs"
 
 [dependencies]
-tch = { version = "0.20", optional = true }
+tch = { version = "0.16", optional = true }
 tokenizers = "0.21"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -23,6 +23,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 safetensors = "0.5"
 ffmpeg-next = "8"
 ffmpeg-sys-next = "8"
+memmap2 = "0.9"
+clap = { version = "4", features = ["derive"] }
+actix-web = "=4.8.0"
+actix-multipart = "=0.6.1"
+time = "=0.3.36"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+tempfile = "3"
 
 [build-dependencies]
 cmake = "0.1"
