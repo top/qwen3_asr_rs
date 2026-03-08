@@ -262,6 +262,20 @@ impl AudioEncoder {
             ));
             Some(mask)
         }
+
+        #[cfg(feature = "onnx-runtime")]
+        {
+            let allow_i32: Vec<i32> = allow_data.iter().map(|&b| if b { 1 } else { 0 }).collect();
+            let allow_tensor = Tensor::from_slice_i64(&allow_i32);
+            let allow_mask = allow_tensor.reshape(&[1, 1, total_tokens as i64, total_tokens as i64]);
+            // where(allow, 0, -inf) - use where_cond
+            let mask = onnx_backend::Tensor::where_cond(
+                &zero.as_onnx(),
+                &allow_mask.as_onnx().to_dtype(onnx_backend::DType::Float32), /* condition */
+                &neg_inf.as_onnx(),
+            );
+            Some(Tensor::from_onnx(mask))
+        }
     }
 
     /// Compute output token count for a given number of input frames through 3x Conv2d.

@@ -1174,3 +1174,121 @@ impl std::ops::AddAssign<Tensor> for Tensor {
         *self = &*self + &rhs;
     }
 }
+
+// ===== ONNX Runtime backend implementation (wrapper) =====
+
+#[cfg(feature = "onnx-runtime")]
+impl Tensor {
+    pub fn as_onnx(&self) -> &onnx_backend::Tensor {
+        &self.inner
+    }
+
+    pub fn from_slice_f32(data: &[f32]) -> Self {
+        let shape = vec![data.len() as i64];
+        Tensor::from_onnx(onnx_backend::Tensor {
+            data: data.to_vec(),
+            shape,
+            dtype: onnx_backend::DType::Float32,
+        })
+    }
+
+    pub fn from_slice_i64(data: &[i64]) -> Self {
+        let shape = vec![data.len() as i64];
+        Tensor::from_onnx(onnx_backend::Tensor {
+            data: data.iter().map(|&x| x as f32).collect(),
+            shape,
+            dtype: onnx_backend::DType::Int64,
+        })
+    }
+
+    pub fn zeros(shape: &[i64], dtype: DType, device: &Device) -> Self {
+        Tensor::from_onnx(onnx_backend::Tensor::zeros(shape, dtype.into(), device))
+    }
+
+    pub fn ones(shape: &[i64], dtype: DType, device: &Device) -> Self {
+        Tensor::from_onnx(onnx_backend::Tensor::ones(shape, dtype.into(), device))
+    }
+
+    pub fn full(shape: &[i64], val: f64, dtype: DType, device: &Device) -> Self {
+        Tensor::from_onnx(onnx_backend::Tensor::full(shape, val, dtype.into(), device))
+    }
+
+    pub fn arange(start: i64, end: i64, device: Device) -> Self {
+        Tensor::from_onnx(onnx_backend::Tensor::arange(start, end, &device))
+    }
+
+    pub fn arange_f(start: f64, end: f64, step: f64, dtype: DType, device: &Device) -> Self {
+        Tensor::from_onnx(onnx_backend::Tensor::arange_f(start, end, device))
+    }
+
+    pub fn from_onnx(t: onnx_backend::Tensor) -> Self {
+        Tensor { inner: t }
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Self {
+        Tensor::from_onnx(self.inner.to_dtype(dtype.into()))
+    }
+
+    // Delegate all operations to onnx_backend::Tensor
+    pub fn neg(&self) -> Self { Tensor::from_onnx(self.inner.neg()) }
+    pub fn abs(&self) -> Self { Tensor::from_onnx(self.inner.abs()) }
+    pub fn square(&self) -> Self { Tensor::from_onnx(self.inner.square()) }
+    pub fn sqrt(&self) -> Self { Tensor::from_onnx(self.inner.sqrt()) }
+    pub fn exp(&self) -> Self { Tensor::from_onnx(self.inner.exp()) }
+    pub fn log10(&self) -> Self { Tensor::from_onnx(self.inner.log10()) }
+    pub fn sin(&self) -> Self { Tensor::from_onnx(self.inner.sin()) }
+    pub fn cos(&self) -> Self { Tensor::from_onnx(self.inner.cos()) }
+    pub fn gelu(&self) -> Self { Tensor::from_onnx(self.inner.gelu()) }
+    pub fn silu(&self) -> Self { Tensor::from_onnx(self.inner.silu()) }
+    pub fn softmax(&self, dim: i64) -> Self { Tensor::from_onnx(self.inner.softmax(dim)) }
+    pub fn matmul(&self, other: &Tensor) -> Self { Tensor::from_onnx(self.inner.matmul(other)) }
+    pub fn maximum(&self, other: &Tensor) -> Self { Tensor::from_onnx(self.inner.maximum(other)) }
+    pub fn mean(&self) -> Self { Tensor::from_onnx(self.inner.mean_dim(&[], false)) }
+    pub fn max(&self) -> Self { Tensor::from_onnx(self.inner.max()) }
+    pub fn get(&self, index: i64) -> Self { Tensor::from_onnx(self.inner.get(index)) }
+    pub fn select(&self, dim: i64, index: i64) -> Self { Tensor::from_onnx(self.inner.select(dim, index)) }
+    pub fn narrow(&self, dim: i64, start: i64, len: i64) -> Self { Tensor::from_onnx(self.inner.narrow(dim, start, len)) }
+    pub fn reshape(&self, shape: &[i64]) -> Self { Tensor::from_onnx(self.inner.reshape(shape)) }
+    pub fn transpose(&self, dim0: i64, dim1: i64) -> Self { Tensor::from_onnx(self.inner.transpose(dim0, dim1)) }
+    pub fn permute(&self, dims: &[i64]) -> Self { Tensor::from_onnx(self.inner.permute(dims)) }
+    pub fn unsqueeze(&self, dim: i64) -> Self { Tensor::from_onnx(self.inner.unsqueeze(dim)) }
+    pub fn squeeze_dim(&self, dim: i64) -> Self { Tensor::from_onnx(self.inner.squeeze_dim(dim)) }
+    pub fn expand(&self, size: &[i64], implicit: bool) -> Self { Tensor::from_onnx(self.inner.expand(size, implicit)) }
+    pub fn clamp_min(&self, min: f64) -> Self { Tensor::from_onnx(self.inner.clamp_min(min)) }
+    pub fn pow_scalar(&self, exp: f64) -> Self { Tensor::from_onnx(self.inner.pow_scalar(exp)) }
+    pub fn tr(&self) -> Self { Tensor::from_onnx(self.inner.tr()) }
+    pub fn argmax(&self, dim: i64, keepdim: bool) -> Self { Tensor::from_onnx(self.inner.argmax(dim, keepdim)) }
+    pub fn triu(&self, diagonal: i64) -> Self { Tensor::from_onnx(self.inner.triu(diagonal)) }
+    pub fn to_vec_f32(&self) -> Vec<f32> { self.inner.to_vec_f32() }
+    pub fn int64_value(&self, indices: &[i64]) -> i64 { self.inner.int64_value(indices) }
+    pub fn f64_value(&self, indices: &[i64]) -> f64 { self.inner.f64_value(indices) }
+}
+
+#[cfg(feature = "onnx-runtime")]
+impl From<onnx_backend::DType> for DType {
+    fn from(dt: onnx_backend::DType) -> Self {
+        match dt {
+            onnx_backend::DType::Float32 => DType::Float32,
+            onnx_backend::DType::Float16 => DType::Float16,
+            onnx_backend::DType::BFloat16 => DType::BFloat16,
+            onnx_backend::DType::Int64 => DType::Int64,
+            onnx_backend::DType::Int32 => DType::Int32,
+            onnx_backend::DType::Bool => DType::Bool,
+        }
+    }
+}
+
+#[cfg(feature = "onnx-runtime")]
+impl From<DType> for onnx_backend::DType {
+    fn from(dt: DType) -> Self {
+        match dt {
+            DType::Float32 => onnx_backend::DType::Float32,
+            DType::Float16 => onnx_backend::DType::Float16,
+            DType::BFloat16 => onnx_backend::DType::BFloat16,
+            DType::Int64 => onnx_backend::DType::Int64,
+            DType::Int32 => onnx_backend::DType::Int32,
+            DType::Bool => onnx_backend::DType::Bool,
+        }
+    }
+    pub fn shallow_clone(&self) -> Self { Tensor::from_onnx(self.inner.shallow_clone()) }
+}

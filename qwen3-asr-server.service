@@ -1,0 +1,22 @@
+[Unit]
+Description=Qwen3 ASR Server (OpenAI-compatible API)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/projects/qwen3-asr-rs
+Environment="LD_LIBRARY_PATH=%h/Desktop/projects/qwen3-asr-rs/.torch/torch/lib"
+Environment="RUST_LOG=info"
+ExecStart=%h/Desktop/projects/qwen3-asr-rs/qwen3_asr_rs/target/release/asr serve \
+    %h/Desktop/projects/qwen3-asr-rs/Qwen3-ASR-0.6B \
+    --host 0.0.0.0 \
+    --port 11435 \
+    --db-path %h/Desktop/projects/qwen3-asr-rs/asr_records.db \
+    --backup-dir %h/Desktop/projects/qwen3-asr-rs/audio_backups
+
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=default.target

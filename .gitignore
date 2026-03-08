@@ -23,6 +23,7 @@ target
 # Model weights and libtorch
 Qwen3-ASR-0.6B/
 libtorch
+.DS_Store
 
 # Test audio files
 *.wav
