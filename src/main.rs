@@ -64,15 +64,14 @@ fn init_logging() {
 }
 
 fn select_device() -> Device {
-    #[cfg(feature = "tch-backend")]
+    #[cfg(feature = "candle-backend")]
     {
-        if tch::Cuda::is_available() {
-            tracing::info!("Using CUDA device");
-            Device::Gpu(0)
-        } else {
-            tracing::info!("Using CPU device");
-            Device::Cpu
+        let device = Device::infer_device();
+        match device {
+            Device::Gpu(_) => tracing::info!("Using CUDA GPU"),
+            Device::Cpu => tracing::info!("Using CPU (CUDA not available)"),
         }
+        device
     }
 
     #[cfg(feature = "mlx")]
@@ -84,11 +83,13 @@ fn select_device() -> Device {
 }
 
 fn load_model(model_path: &str) -> Result<AsrInference> {
+    tracing::info!("Checking model directory: {}", model_path);
     let model_dir = Path::new(model_path);
     if !model_dir.exists() {
         anyhow::bail!("Model directory not found: {}", model_path);
     }
     let device = select_device();
+    tracing::info!("Selected device: {:?}", device);
     AsrInference::load(model_dir, device).context("Failed to load model")
 }
 
@@ -131,12 +132,7 @@ fn main() -> Result<()> {
 
             let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
             rt.block_on(qwen3_asr::server::run_server(
-                model,
-                &host,
-                port,
-                backup_dir,
-                db_path,
-                language,
+                model, &host, port, backup_dir, db_path, language,
             ))?;
         }
     }

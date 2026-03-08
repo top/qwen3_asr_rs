@@ -3,35 +3,32 @@ use std::collections::HashMap;
 use crate::tensor::{DType, Device, Tensor};
 
 use crate::config::TextDecoderConfig;
-use crate::layers::{RmsNorm, TextDecoderLayer};
+use crate::layers::{KvEntry, RmsNorm, TextDecoderLayer};
 use crate::weights::get_weight;
 
 /// KV cache for autoregressive generation.
 pub struct KvCache {
-    pub layers: Vec<Option<(Tensor, Tensor)>>,
+    pub layers: Vec<Option<KvEntry>>,
+    pub max_seq_len: i64,
 }
 
 impl KvCache {
-    pub fn new(num_layers: usize) -> Self {
+    pub fn new(num_layers: usize, max_seq_len: i64) -> Self {
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
             layers.push(None);
         }
-        Self { layers }
+        Self { layers, max_seq_len }
     }
 
-    pub fn get(&self, layer: usize) -> Option<&(Tensor, Tensor)> {
-        self.layers[layer].as_ref()
-    }
-
-    pub fn set(&mut self, layer: usize, cache: (Tensor, Tensor)) {
-        self.layers[layer] = Some(cache);
+    pub fn layer_mut(&mut self, layer: usize) -> &mut Option<KvEntry> {
+        &mut self.layers[layer]
     }
 
     pub fn seq_len(&self) -> i64 {
         self.layers[0]
             .as_ref()
-            .map(|(k, _)| k.size()[2])
+            .map(|kv| kv.len)
             .unwrap_or(0)
     }
 }
@@ -99,16 +96,33 @@ impl TextDecoder {
         kv_cache: &mut KvCache,
         mask: Option<&Tensor>,
     ) -> Tensor {
+        let hidden = self.forward_hidden(hidden_states, cos, sin, kv_cache, mask);
+        self.project_logits(&hidden)
+    }
+
+    pub fn forward_hidden(
+        &self,
+        hidden_states: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        kv_cache: &mut KvCache,
+        mask: Option<&Tensor>,
+    ) -> Tensor {
         let mut hidden = hidden_states.shallow_clone();
+        let max_seq_len = kv_cache.max_seq_len;
 
         for (i, layer) in self.layers.iter().enumerate() {
-            let cache = kv_cache.get(i);
-            let (h, new_cache) = layer.forward(&hidden, cos, sin, cache, mask);
-            kv_cache.set(i, new_cache);
-            hidden = h;
+            let cache = kv_cache.layer_mut(i);
+            hidden = layer.forward(&hidden, cos, sin, cache, max_seq_len, mask);
         }
 
-        let hidden = self.norm.forward(&hidden);
+        self.norm.forward(&hidden)
+    }
+
+    pub fn project_logits(&self, hidden: &Tensor) -> Tensor {
+        let hidden = hidden
+            .to_device(self.lm_head_weight.device())
+            .to_dtype(self.lm_head_weight.kind());
         hidden.matmul(&self.lm_head_weight.tr())
     }
 
@@ -122,7 +136,7 @@ pub fn create_causal_mask(seq_len: i64, past_len: i64, device: Device) -> Tensor
     let total_len = past_len + seq_len;
     let mask = Tensor::full(
         &[seq_len, total_len],
-        f64::NEG_INFINITY,
+        f32::NEG_INFINITY,
         DType::Float32,
         device,
     );

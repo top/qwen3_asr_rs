@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::tensor::{DType, Device, Tensor};
+use anyhow::Result;
 
 /// Whisper-style mel spectrogram feature extractor.
 ///
@@ -24,9 +24,14 @@ impl WhisperFeatureExtractor {
         sample_rate: u32,
         device: Device,
     ) -> Self {
-        let mel_filters =
-            create_mel_filterbank(num_mel_bins, n_fft, sample_rate, 0.0, sample_rate as f64 / 2.0)
-                .to_device(device);
+        let mel_filters = create_mel_filterbank(
+            num_mel_bins,
+            n_fft,
+            sample_rate,
+            0.0,
+            sample_rate as f64 / 2.0,
+        )
+        .to_device(device);
 
         Self {
             n_fft,
@@ -45,12 +50,15 @@ impl WhisperFeatureExtractor {
     /// 3. Apply mel filterbank and log normalization
     ///
     /// Input: f32 samples at self.sample_rate (16kHz)
-    /// Output: (num_mel_bins, num_frames) tensor
+    /// Extract mel spectrogram features from raw audio samples.
     pub fn extract(&self, samples: &[f32], device: Device) -> Result<Tensor> {
+        tracing::debug!("WhisperFeatureExtractor starting on {} audio samples", samples.len());
         // Pad samples to the next multiple of hop_length to ensure clean frame count.
-        let padded_len = ((samples.len() + self.hop_length - 1) / self.hop_length) * self.hop_length;
+        let padded_len =
+            ((samples.len() + self.hop_length - 1) / self.hop_length) * self.hop_length;
         let mut padded_samples = samples.to_vec();
         padded_samples.resize(padded_len, 0.0);
+        tracing::debug!("Padded audio to {}", padded_samples.len());
 
         let waveform = Tensor::from_slice_f32(&padded_samples)
             .to_dtype(DType::Float32)
@@ -62,22 +70,25 @@ impl WhisperFeatureExtractor {
         // Center padding: pad waveform with n_fft//2 reflected samples on each side.
         let pad = (self.n_fft / 2) as i64;
         let waveform = waveform.unsqueeze(0).unsqueeze(0); // (1,1,N) for reflection_pad1d
-        let waveform = waveform.reflection_pad1d(&[pad, pad]).squeeze_dim(0).squeeze_dim(0);
+        let waveform = waveform
+            .reflection_pad1d(&[pad, pad])
+            .squeeze_dim(0)
+            .squeeze_dim(0);
 
         // Compute STFT (no center, since we already padded manually)
         let stft = waveform.stft(
-            self.n_fft as i64,           // n_fft
-            self.hop_length as i64,      // hop_length
-            self.n_fft as i64,           // win_length (defaults to n_fft)
-            &window,                     // window
-            false,                       // normalized
-            true,                        // onesided
-            true,                        // return_complex
+            self.n_fft as i64,      // n_fft
+            self.hop_length as i64, // hop_length
+            self.n_fft as i64,      // win_length (defaults to n_fft)
+            &window,                // window
+            false,                  // normalized
+            true,                   // onesided
         );
 
         // Compute power spectrogram: |STFT|^2
         // stft shape: (n_fft/2+1, num_frames)
         let magnitudes = stft.abs().square();
+        tracing::debug!("mel: stft shape={:?}, magnitudes shape={:?}", stft.size(), magnitudes.size());
 
         // Remove last frame to match Python: magnitudes = magnitudes[..., :-1]
         let num_frames = magnitudes.size()[1];
@@ -85,12 +96,22 @@ impl WhisperFeatureExtractor {
 
         // Apply mel filterbank: (num_mel_bins, n_fft/2+1) @ (n_fft/2+1, num_frames)
         let mel_spec = self.mel_filters.matmul(&magnitudes);
+        tracing::debug!(
+            "mel: mel_filters shape={:?}, mel_spec shape={:?}",
+            self.mel_filters.size(),
+            mel_spec.size()
+        );
 
         // Log-mel spectrogram with Whisper-style normalization
         let log_mel = mel_spec.clamp_min(1e-10).log10();
         let max_val = log_mel.max();
-        let log_mel = log_mel.maximum(&(&max_val - 8.0));
-        let log_mel = (&log_mel + 4.0) / 4.0;
+        tracing::debug!(
+            "mel: log_mel shape={:?}, max_val shape={:?}",
+            log_mel.size(),
+            max_val.size()
+        );
+        let log_mel = log_mel.maximum(&(&max_val + (-8.0f32)));
+        let log_mel = (&log_mel + 4.0f32) / 4.0f32;
 
         Ok(log_mel)
     }
@@ -156,9 +177,7 @@ fn create_mel_filterbank(
         .collect();
 
     // FFT bin center frequencies (matching np.fft.rfftfreq)
-    let all_freqs: Vec<f64> = (0..n_freqs)
-        .map(|j| j as f64 * sr / n_fft as f64)
-        .collect();
+    let all_freqs: Vec<f64> = (0..n_freqs).map(|j| j as f64 * sr / n_fft as f64).collect();
 
     // Frequency differences between adjacent mel filter edges
     let f_diff: Vec<f64> = filter_freqs.windows(2).map(|w| w[1] - w[0]).collect();

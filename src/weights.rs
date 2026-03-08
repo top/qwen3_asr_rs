@@ -4,9 +4,6 @@ use std::path::Path;
 use crate::tensor::{Device, Tensor};
 
 /// Load all tensors from a model directory.
-///
-/// Supports both single-file (`model.safetensors`) and sharded
-/// (`model.safetensors.index.json` + `model-00001-of-N.safetensors`) formats.
 pub fn load_model_weights(model_dir: &Path, device: Device) -> Result<HashMap<String, Tensor>> {
     let single_path = model_dir.join("model.safetensors");
     let index_path = model_dir.join("model.safetensors.index.json");
@@ -36,7 +33,6 @@ fn load_sharded_safetensors(index_path: &Path, device: Device) -> Result<HashMap
         .as_object()
         .context("Missing weight_map in index")?;
 
-    // Collect unique shard filenames
     let mut shard_files: Vec<String> = weight_map.values()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
@@ -57,95 +53,36 @@ fn load_sharded_safetensors(index_path: &Path, device: Device) -> Result<HashMap
     Ok(all_weights)
 }
 
-/// Load all tensors from a single safetensors file.
-#[cfg(feature = "tch-backend")]
+#[cfg(feature = "candle-backend")]
 pub fn load_safetensors(path: &Path, device: Device) -> Result<HashMap<String, Tensor>> {
-    let tch_device = tch::Device::from(device);
-
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open safetensors: {:?}", path))?;
-    let mmap = unsafe { memmap2::MmapOptions::new().map(&file) }
-        .with_context(|| format!("Failed to mmap safetensors: {:?}", path))?;
-
-    let tensors = safetensors::SafeTensors::deserialize(&mmap)
-        .with_context(|| format!("Failed to deserialize safetensors: {:?}", path))?;
-
-    let mut result = HashMap::new();
-
-    for (name, view) in tensors.iter() {
-        let shape: Vec<i64> = view.shape().iter().map(|&s| s as i64).collect();
-        let tensor = match view.dtype() {
-            safetensors::Dtype::BF16 => {
-                Tensor::from_tch(
-                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::BFloat16)
-                        .to_device(tch_device),
-                )
-            }
-            safetensors::Dtype::F16 => {
-                Tensor::from_tch(
-                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Half)
-                        .to_device(tch_device),
-                )
-            }
-            safetensors::Dtype::F32 => {
-                Tensor::from_tch(
-                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Float)
-                        .to_device(tch_device),
-                )
-            }
-            safetensors::Dtype::I64 => {
-                Tensor::from_tch(
-                    tch::Tensor::from_data_size(view.data(), &shape, tch::Kind::Int64)
-                        .to_device(tch_device),
-                )
-            }
-            dt => anyhow::bail!("Unsupported dtype in safetensors: {:?}", dt),
-        };
-        result.insert(name.to_string(), tensor);
-    }
-
-    Ok(result)
+    let c_device = crate::backend::candle::ffi::device_to_candle(device);
+    let map = crate::backend::candle::io::load_safetensors(path, &c_device)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(map.into_iter().map(|(name, arr)| (name, Tensor::from_candle(arr))).collect())
 }
 
-/// Load all tensors from a single safetensors file (MLX backend).
 #[cfg(feature = "mlx")]
 pub fn load_safetensors(path: &Path, _device: Device) -> Result<HashMap<String, Tensor>> {
     let map = crate::backend::mlx::io::load_safetensors(path)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    Ok(map
-        .into_iter()
-        .map(|(name, arr)| (name, Tensor::from_mlx(arr)))
-        .collect())
+    Ok(map.into_iter().map(|(name, arr)| (name, Tensor::from_mlx(arr))).collect())
 }
 
-
-/// Get a tensor from the weights map with a given prefix and suffix.
-pub fn get_weight(
-    weights: &HashMap<String, Tensor>,
-    prefix: &str,
-    name: &str,
-) -> Result<Tensor> {
-    let key = if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}.{}", prefix, name)
+pub fn get_weight(weights: &HashMap<String, Tensor>, prefix: &str, name: &str) -> Result<Tensor> {
+    let key = if prefix.is_empty() { 
+        name.to_string() 
+    } else { 
+        format!("{}.{}", prefix, name) 
     };
-    weights
-        .get(&key)
-        .map(|t| t.shallow_clone())
+    weights.get(&key).map(|t| t.shallow_clone())
         .with_context(|| format!("Weight not found: {}", key))
 }
 
-/// Get an optional tensor (returns None if not found).
-pub fn get_weight_opt(
-    weights: &HashMap<String, Tensor>,
-    prefix: &str,
-    name: &str,
-) -> Option<Tensor> {
-    let key = if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}.{}", prefix, name)
+pub fn get_weight_opt(weights: &HashMap<String, Tensor>, prefix: &str, name: &str) -> Option<Tensor> {
+    let key = if prefix.is_empty() { 
+        name.to_string() 
+    } else { 
+        format!("{}.{}", prefix, name) 
     };
     weights.get(&key).map(|t| t.shallow_clone())
 }

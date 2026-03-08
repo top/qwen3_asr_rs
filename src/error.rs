@@ -20,9 +20,13 @@ pub enum AsrError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[cfg(feature = "tch-backend")]
-    #[error("Torch error: {0}")]
-    Torch(#[from] tch::TchError),
+    #[cfg(feature = "candle-backend")]
+    #[error("Candle error: {0}")]
+    Candle(#[from] candle_core::Error),
+
+    #[cfg(feature = "mlx")]
+    #[error("MLX error: {0}")]
+    Mlx(String),
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

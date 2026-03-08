@@ -40,10 +40,14 @@ impl AsrTokenizer {
 
     /// Decode token IDs to text.
     pub fn decode(&self, ids: &[i64]) -> Result<String> {
+        self.decode_with_special(ids, true)
+    }
+
+    pub fn decode_with_special(&self, ids: &[i64], skip_special_tokens: bool) -> Result<String> {
         let u32_ids: Vec<u32> = ids.iter().map(|&id| id as u32).collect();
         let text = self
             .tokenizer
-            .decode(&u32_ids, true)
+            .decode(&u32_ids, skip_special_tokens)
             .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
         Ok(text)
     }

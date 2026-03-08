@@ -2,7 +2,7 @@
 name = "qwen3_asr"
 version = "0.1.8"
 edition = "2021"
-description = "Pure Rust implementation of Qwen3 ASR (Automatic Speech Recognition) using libtorch"
+description = "Pure Rust implementation of Qwen3 ASR (Automatic Speech Recognition) using Candle with CUDA support for Jetson Orin Nano"
 license = "Apache-2.0"
 
 [[bin]]
@@ -10,7 +10,8 @@ name = "asr"
 path = "src/main.rs"
 
 [dependencies]
-tch = { version = "0.16", optional = true }
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
 tokenizers = "0.21"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -21,8 +22,6 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 safetensors = "0.5"
-ffmpeg-next = "8"
-ffmpeg-sys-next = "8"
 memmap2 = "0.9"
 clap = { version = "4", features = ["derive"] }
 actix-web = "=4.8.0"
@@ -34,13 +33,13 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 tempfile = "3"
+rustfft = "6"
 
 [build-dependencies]
 cmake = "0.1"
 
 [features]
-default = ["tch-backend"]
-tch-backend = ["dep:tch"]
+default = ["candle-backend"]
+candle-backend = ["dep:candle-core", "dep:candle-nn"]
+cuda = ["candle-backend", "candle-core/cuda", "candle-nn/cuda"]
 mlx = []
-static-ffmpeg = ["ffmpeg-sys-next/static"]
-build-ffmpeg = ["ffmpeg-sys-next/build", "static-ffmpeg"]

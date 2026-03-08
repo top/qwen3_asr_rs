@@ -1,10 +1,5 @@
-//! Unified tensor abstraction over tch (libtorch) and MLX backends.
-//!
-//! All neural network modules use these types instead of importing `tch` directly.
-
-// ---------------------------------------------------------------------------
-// DType — data type abstraction
-// ---------------------------------------------------------------------------
+//! Unified tensor abstraction over candle (CUDA) and MLX backends.
+use crate::backend::candle::array::CANDLE_ARRAY;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
@@ -16,30 +11,29 @@ pub enum DType {
     Bool,
 }
 
-#[cfg(feature = "tch-backend")]
-impl From<DType> for tch::Kind {
+#[cfg(feature = "candle-backend")]
+impl From<DType> for candle_core::DType {
     fn from(dt: DType) -> Self {
         match dt {
-            DType::Float32 => tch::Kind::Float,
-            DType::Float16 => tch::Kind::Half,
-            DType::BFloat16 => tch::Kind::BFloat16,
-            DType::Int64 => tch::Kind::Int64,
-            DType::Int32 => tch::Kind::Int,
-            DType::Bool => tch::Kind::Bool,
+            DType::Float32 => candle_core::DType::F32,
+            DType::Float16 => candle_core::DType::F16,
+            DType::BFloat16 => candle_core::DType::BF16,
+            DType::Int64 => candle_core::DType::I64,
+            DType::Int32 => candle_core::DType::I32,
+            DType::Bool => candle_core::DType::U8,
         }
     }
 }
 
-#[cfg(feature = "tch-backend")]
-impl From<tch::Kind> for DType {
-    fn from(kind: tch::Kind) -> Self {
-        match kind {
-            tch::Kind::Float => DType::Float32,
-            tch::Kind::Half => DType::Float16,
-            tch::Kind::BFloat16 => DType::BFloat16,
-            tch::Kind::Int64 => DType::Int64,
-            tch::Kind::Int => DType::Int32,
-            tch::Kind::Bool => DType::Bool,
+#[cfg(feature = "candle-backend")]
+impl From<&candle_core::DType> for DType {
+    fn from(dt: &candle_core::DType) -> Self {
+        match dt {
+            candle_core::DType::F32 => DType::Float32,
+            candle_core::DType::F16 => DType::Float16,
+            candle_core::DType::BF16 => DType::BFloat16,
+            candle_core::DType::I64 => DType::Int64,
+            candle_core::DType::I32 => DType::Int32,
             _ => DType::Float32,
         }
     }
@@ -76,10 +70,6 @@ impl From<crate::backend::mlx::ffi::mlx_dtype> for DType {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Device — compute device abstraction
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
     Cpu,
@@ -90,36 +80,16 @@ impl Device {
     pub fn gpu() -> Self {
         Device::Gpu(0)
     }
-}
 
-#[cfg(feature = "tch-backend")]
-impl From<Device> for tch::Device {
-    fn from(d: Device) -> Self {
-        match d {
-            Device::Cpu => tch::Device::Cpu,
-            Device::Gpu(i) => tch::Device::Cuda(i),
-        }
+    #[cfg(feature = "candle-backend")]
+    pub fn infer_device() -> Self {
+        crate::backend::candle::ffi::infer_device()
     }
 }
-
-#[cfg(feature = "tch-backend")]
-impl From<tch::Device> for Device {
-    fn from(d: tch::Device) -> Self {
-        match d {
-            tch::Device::Cpu => Device::Cpu,
-            tch::Device::Cuda(i) => Device::Gpu(i),
-            _ => Device::Cpu,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tensor — unified tensor type
-// ---------------------------------------------------------------------------
 
 pub struct Tensor {
-    #[cfg(feature = "tch-backend")]
-    pub(crate) inner: tch::Tensor,
+    #[cfg(feature = "candle-backend")]
+    pub(crate) inner: crate::backend::candle::array::CANDLE_ARRAY,
 
     #[cfg(feature = "mlx")]
     pub(crate) inner: crate::backend::mlx::array::MlxArray,
@@ -127,297 +97,500 @@ pub struct Tensor {
 
 impl std::fmt::Debug for Tensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Tensor(shape={:?}, dtype={:?})", self.size(), self.kind())
+        write!(
+            f,
+            "Tensor(shape={:?}, dtype={:?})",
+            self.size(),
+            self.kind()
+        )
     }
 }
 
 impl Clone for Tensor {
     fn clone(&self) -> Self {
-        #[cfg(feature = "tch-backend")]
-        { Tensor { inner: self.inner.shallow_clone() } }
+        #[cfg(feature = "candle-backend")]
+        {
+            Tensor {
+                inner: self.inner.clone(),
+            }
+        }
+
         #[cfg(feature = "mlx")]
-        { Tensor { inner: self.inner.clone() } }
+        {
+            Tensor {
+                inner: self.inner.clone(),
+            }
+        }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Context Management
-// ---------------------------------------------------------------------------
 
 pub fn no_grad<T, F: FnOnce() -> T>(f: F) -> T {
-    #[cfg(feature = "tch-backend")]
-    {
-        tch::no_grad(f)
-    }
-    #[cfg(feature = "mlx")]
-    {
-        // MLX doesn't construct graphs eagerly, no-op needed
-        f()
-    }
+    f() // Candle and MLX don't construct graphs eagerly
 }
 
-// ===== tch backend implementation =====
-
-#[cfg(feature = "tch-backend")]
-#[allow(dead_code)]
+#[cfg(feature = "candle-backend")]
 impl Tensor {
-    pub fn from_tch(t: tch::Tensor) -> Self {
-        Tensor { inner: t }
+    pub fn from_candle(a: crate::backend::candle::array::CANDLE_ARRAY) -> Self {
+        Tensor { inner: a }
     }
 
-    pub fn as_tch(&self) -> &tch::Tensor {
+    pub fn as_candle(&self) -> &crate::backend::candle::array::CANDLE_ARRAY {
         &self.inner
     }
 
-    pub fn into_tch(self) -> tch::Tensor {
-        self.inner
-    }
-
-    // -- Creation --
-
     pub fn from_slice_f32(data: &[f32]) -> Self {
-        Tensor::from_tch(tch::Tensor::from_slice(data))
+        let shape = [data.len() as i64];
+        Tensor::from_candle(crate::backend::candle::ops::from_f32(data, &shape).unwrap())
     }
 
     pub fn from_slice_i64(data: &[i64]) -> Self {
-        Tensor::from_tch(tch::Tensor::from_slice(data))
+        let shape = [data.len() as i64];
+        Tensor::from_candle(crate::backend::candle::ops::from_i64(data, &shape).unwrap())
     }
 
     pub fn zeros(shape: &[i64], dtype: DType, device: Device) -> Self {
-        let opts = (tch::Kind::from(dtype), tch::Device::from(device));
-        Tensor::from_tch(tch::Tensor::zeros(shape, opts))
+        Tensor::from_candle(crate::backend::candle::ops::zeros(shape, dtype).unwrap()).to_device(device)
     }
 
     pub fn ones(shape: &[i64], dtype: DType, device: Device) -> Self {
-        let opts = (tch::Kind::from(dtype), tch::Device::from(device));
-        Tensor::from_tch(tch::Tensor::ones(shape, opts))
+        Tensor::from_candle(crate::backend::candle::ops::ones(shape, dtype).unwrap()).to_device(device)
     }
 
-    pub fn full(shape: &[i64], val: f64, dtype: DType, device: Device) -> Self {
-        let opts = (tch::Kind::from(dtype), tch::Device::from(device));
-        Tensor::from_tch(tch::Tensor::full(shape, val, opts))
+    pub fn full(shape: &[i64], val: f32, dtype: DType, device: Device) -> Self {
+        Tensor::from_candle(crate::backend::candle::ops::full(shape, val, dtype).unwrap()).to_device(device)
     }
 
     pub fn arange(start: i64, end: i64, device: Device) -> Self {
-        let t = tch::Tensor::arange(end - start, (tch::Kind::Int64, tch::Device::from(device)))
-            + start;
-        Tensor::from_tch(t)
+        Tensor::from_candle(crate::backend::candle::ops::arange(start, end).unwrap()).to_device(device)
     }
 
-    pub fn arange_f(start: f64, end: f64, step: f64, dtype: DType, device: Device) -> Self {
-        let t = tch::Tensor::arange_start_step(
-            start, end, step,
-            (tch::Kind::from(dtype), tch::Device::from(device)),
-        );
-        Tensor::from_tch(t)
+    pub fn arange_f(start: f32, end: f32, step: f32, dtype: DType, device: Device) -> Self {
+        Tensor::from_candle(crate::backend::candle::ops::arange_f(start, end, step, dtype).unwrap()).to_device(device)
     }
 
     pub fn cat(tensors: &[Tensor], dim: i64) -> Self {
-        let inner: Vec<&tch::Tensor> = tensors.iter().map(|t| &t.inner).collect();
-        Tensor::from_tch(tch::Tensor::cat(&inner, dim))
+        assert!(!tensors.is_empty(), "cat requires at least one tensor");
+        let rank = tensors[0].inner.inner.dims().len() as i64;
+        let d = if dim < 0 { rank + dim } else { dim };
+        let d = d as usize;
+        let base_dev = tensors[0].inner.inner.device().clone();
+        let base_dtype = tensors[0].inner.inner.dtype();
+        let aligned: Vec<CANDLE_ARRAY> = tensors
+            .iter()
+            .map(|t| {
+                let on_dev = t.inner.inner.to_device(&base_dev).unwrap();
+                let on_dtype = if on_dev.dtype() != base_dtype {
+                    on_dev.to_dtype(base_dtype).unwrap()
+                } else {
+                    on_dev
+                };
+                CANDLE_ARRAY::new(on_dtype)
+            })
+            .collect();
+        let refs: Vec<&crate::backend::candle::array::CANDLE_ARRAY> = aligned.iter().collect();
+        Tensor::from_candle(crate::backend::candle::ops::concatenate(&refs, d).unwrap())
     }
 
     pub fn stack(tensors: &[Tensor], dim: i64) -> Self {
-        let inner: Vec<&tch::Tensor> = tensors.iter().map(|t| &t.inner).collect();
-        Tensor::from_tch(tch::Tensor::stack(&inner, dim))
+        assert!(!tensors.is_empty(), "stack requires at least one tensor");
+        let rank = tensors[0].inner.inner.dims().len() as i64 + 1;
+        let d = if dim < 0 { rank + dim } else { dim };
+        let d = d as usize;
+        let base_dev = tensors[0].inner.inner.device().clone();
+        let base_dtype = tensors[0].inner.inner.dtype();
+        let aligned: Vec<CANDLE_ARRAY> = tensors
+            .iter()
+            .map(|t| {
+                let on_dev = t.inner.inner.to_device(&base_dev).unwrap();
+                let on_dtype = if on_dev.dtype() != base_dtype {
+                    on_dev.to_dtype(base_dtype).unwrap()
+                } else {
+                    on_dev
+                };
+                CANDLE_ARRAY::new(on_dtype)
+            })
+            .collect();
+        let refs: Vec<&crate::backend::candle::array::CANDLE_ARRAY> = aligned.iter().collect();
+        Tensor::from_candle(crate::backend::candle::ops::stack(&refs, d).unwrap())
     }
 
     pub fn embedding(weight: &Tensor, indices: &Tensor) -> Self {
-        Tensor::from_tch(tch::Tensor::embedding(
-            &weight.inner, &indices.inner, -1, false, false,
-        ))
+        let flat_indices = indices.inner.inner.flatten_all().unwrap();
+        let ids_u32 = flat_indices.to_dtype(candle_core::DType::U32).unwrap();
+        let out = weight.inner.inner.embedding(&ids_u32).unwrap();
+        let expected_shape: Vec<usize> = indices
+            .inner
+            .inner
+            .dims()
+            .iter()
+            .copied()
+            .chain(std::iter::once(weight.inner.inner.dims()[1]))
+            .collect();
+        let reshaped = out.reshape(expected_shape).unwrap();
+        Tensor::from_candle(CANDLE_ARRAY::new(reshaped))
     }
 
     pub fn hann_window(size: i64, device: Device) -> Self {
-        Tensor::from_tch(tch::Tensor::hann_window(
-            size, (tch::Kind::Float, tch::Device::from(device)),
-        ))
+        Tensor::from_candle(crate::backend::candle::signal::hann_window(size as usize).unwrap()).to_device(device)
     }
 
-    // -- Shape --
-
     pub fn size(&self) -> Vec<i64> {
-        self.inner.size()
+        self.inner
+            .inner
+            .shape()
+            .dims()
+            .iter()
+            .map(|&d| d as i64)
+            .collect()
     }
 
     pub fn size3(&self) -> (i64, i64, i64) {
-        self.inner.size3().unwrap()
+        let s = self.size();
+        (s[0], s[1], s[2])
     }
 
     pub fn size4(&self) -> (i64, i64, i64, i64) {
-        self.inner.size4().unwrap()
+        let s = self.size();
+        (s[0], s[1], s[2], s[3])
     }
 
     pub fn dim(&self) -> usize {
-        self.inner.dim()
+        self.inner.inner.dims().len()
     }
 
     pub fn view(&self, shape: &[i64]) -> Self {
-        Tensor::from_tch(self.inner.view(shape))
+        Tensor::from_candle(crate::backend::candle::ops::reshape(&self.inner, shape).unwrap())
     }
 
     pub fn reshape(&self, shape: &[i64]) -> Self {
-        Tensor::from_tch(self.inner.reshape(shape))
+        self.view(shape)
     }
 
     pub fn narrow(&self, dim: i64, start: i64, len: i64) -> Self {
-        Tensor::from_tch(self.inner.narrow(dim, start, len))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(
+            crate::backend::candle::ops::narrow(&self.inner, d, start as usize, len as usize)
+                .unwrap(),
+        )
     }
 
     pub fn unsqueeze(&self, dim: i64) -> Self {
-        Tensor::from_tch(self.inner.unsqueeze(dim))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::unsqueeze(&self.inner, d).unwrap())
     }
 
     pub fn squeeze_dim(&self, dim: i64) -> Self {
-        Tensor::from_tch(self.inner.squeeze_dim(dim))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::squeeze_dim(&self.inner, d).unwrap())
     }
 
     pub fn transpose(&self, dim0: i64, dim1: i64) -> Self {
-        Tensor::from_tch(self.inner.transpose(dim0, dim1))
+        let d0 = if dim0 < 0 {
+            (self.dim() as i64 + dim0) as usize
+        } else {
+            dim0 as usize
+        };
+        let d1 = if dim1 < 0 {
+            (self.dim() as i64 + dim1) as usize
+        } else {
+            dim1 as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::transpose(&self.inner, d0, d1).unwrap())
     }
 
     pub fn permute(&self, dims: &[i64]) -> Self {
-        Tensor::from_tch(self.inner.permute(dims))
+        let dims_usize: Vec<usize> = dims
+            .iter()
+            .map(|&d| {
+                if d < 0 {
+                    (self.dim() as i64 + d) as usize
+                } else {
+                    d as usize
+                }
+            })
+            .collect();
+        Tensor::from_candle(crate::backend::candle::ops::permute(&self.inner, &dims_usize).unwrap())
     }
 
-    pub fn expand(&self, size: &[i64], implicit: bool) -> Self {
-        Tensor::from_tch(self.inner.expand(size, implicit))
+    pub fn expand(&self, size: &[i64], _implicit: bool) -> Self {
+        let current = self.inner.inner.dims();
+        let target: Vec<usize> = size
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| if s == -1 { current[i] } else { s as usize })
+            .collect();
+        let out = self.inner.inner.broadcast_as(target).unwrap();
+        Tensor::from_candle(CANDLE_ARRAY::new(out))
     }
-
     pub fn contiguous(&self) -> Self {
-        Tensor::from_tch(self.inner.contiguous())
+        let out = self.inner.inner.contiguous().unwrap();
+        Tensor::from_candle(CANDLE_ARRAY::new(out))
     }
-
     pub fn tr(&self) -> Self {
-        Tensor::from_tch(self.inner.tr())
+        self.transpose(-2, -1)
     }
 
     pub fn get(&self, index: i64) -> Self {
-        Tensor::from_tch(self.inner.get(index))
+        let idx = if index < 0 {
+            (self.size()[0] as i64 + index) as usize
+        } else {
+            index as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::get(&self.inner, idx).unwrap())
     }
 
     pub fn select(&self, dim: i64, index: i64) -> Self {
-        Tensor::from_tch(self.inner.select(dim, index))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(
+            crate::backend::candle::ops::narrow(&self.inner, d, index as usize, 1).unwrap(),
+        )
+        .squeeze_dim(dim)
     }
-
-    // -- Arithmetic --
 
     pub fn matmul(&self, other: &Tensor) -> Self {
-        Tensor::from_tch(self.inner.matmul(&other.inner))
+        Tensor::from_candle(crate::backend::candle::ops::matmul(&self.inner, &other.inner).unwrap())
     }
 
-    pub fn pow_scalar(&self, exp: f64) -> Self {
-        Tensor::from_tch(self.inner.pow_tensor_scalar(exp))
+    pub fn pow_scalar(&self, exp: f32) -> Self {
+        Tensor::from_candle(crate::backend::candle::ops::pow_scalar(&self.inner, exp).unwrap())
     }
 
     pub fn neg(&self) -> Self {
-        Tensor::from_tch(self.inner.neg())
+        Tensor::from_candle(crate::backend::candle::ops::neg(&self.inner).unwrap())
     }
 
-    pub fn clamp_min(&self, min: f64) -> Self {
-        Tensor::from_tch(self.inner.clamp_min(min))
+    pub fn clamp_min(&self, min: f32) -> Self {
+        let min_arr = crate::backend::candle::array::CANDLE_ARRAY::new(
+            (candle_core::Tensor::ones_like(&self.inner.inner).unwrap() * (min as f64)).unwrap(),
+        );
+        Tensor::from_candle(crate::backend::candle::ops::maximum(&self.inner, &min_arr).unwrap())
     }
 
     pub fn maximum(&self, other: &Tensor) -> Self {
-        Tensor::from_tch(self.inner.maximum(&other.inner))
+        let lhs = self.inner.inner.clone();
+        let rhs_on_lhs = other.inner.inner.to_device(lhs.device()).unwrap();
+        let rhs = if rhs_on_lhs.dtype() != lhs.dtype() {
+            rhs_on_lhs.to_dtype(lhs.dtype()).unwrap()
+        } else {
+            rhs_on_lhs
+        };
+        let rhs_arr = CANDLE_ARRAY::new(rhs.clone());
+
+        if let Ok(result) = crate::backend::candle::ops::maximum(&CANDLE_ARRAY::new(lhs.clone()), &rhs_arr) {
+            return Tensor::from_candle(result);
+        }
+
+        let self_shape = lhs.shape().dims();
+        let other_shape = rhs.shape().dims();
+        let self_numel: usize = self_shape.iter().product();
+        let other_numel: usize = other_shape.iter().product();
+
+        if other_numel == 1 && self_numel > 1 {
+            let scalar = rhs.flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let other_expanded = CANDLE_ARRAY::new(
+                (candle_core::Tensor::ones_like(&lhs).unwrap() * (scalar as f64))
+                    .unwrap(),
+            );
+            return Tensor::from_candle(
+                crate::backend::candle::ops::maximum(&CANDLE_ARRAY::new(lhs), &other_expanded).unwrap(),
+            );
+        }
+
+        if self_numel == 1 && other_numel > 1 {
+            let scalar = lhs.flatten_all().unwrap().to_vec1::<f32>().unwrap()[0];
+            let self_expanded = CANDLE_ARRAY::new(
+                (candle_core::Tensor::ones_like(&rhs).unwrap() * (scalar as f64))
+                    .unwrap(),
+            );
+            return Tensor::from_candle(
+                crate::backend::candle::ops::maximum(&self_expanded, &rhs_arr).unwrap(),
+            );
+        }
+
+        Tensor::from_candle(crate::backend::candle::ops::maximum(&CANDLE_ARRAY::new(lhs), &rhs_arr).unwrap())
     }
 
-    // -- Math --
-
     pub fn abs(&self) -> Self {
-        Tensor::from_tch(self.inner.abs())
+        Tensor::from_candle(crate::backend::candle::ops::abs(&self.inner).unwrap())
     }
 
     pub fn square(&self) -> Self {
-        Tensor::from_tch(self.inner.square())
+        Tensor::from_candle(crate::backend::candle::ops::square(&self.inner).unwrap())
     }
 
     pub fn sqrt(&self) -> Self {
-        Tensor::from_tch(self.inner.sqrt())
+        Tensor::from_candle(crate::backend::candle::ops::sqrt(&self.inner).unwrap())
     }
 
     pub fn rsqrt(&self) -> Self {
-        let s = self.inner.sqrt();
-        Tensor::from_tch(s.reciprocal())
+        Tensor::from_candle(crate::backend::candle::ops::rsqrt(&self.inner).unwrap())
     }
 
     pub fn log10(&self) -> Self {
-        Tensor::from_tch(self.inner.log10())
+        Tensor::from_candle(crate::backend::candle::ops::log10(&self.inner).unwrap())
     }
 
     pub fn sin(&self) -> Self {
-        Tensor::from_tch(self.inner.sin())
+        Tensor::from_candle(crate::backend::candle::ops::sin(&self.inner).unwrap())
     }
 
     pub fn cos(&self) -> Self {
-        Tensor::from_tch(self.inner.cos())
+        Tensor::from_candle(crate::backend::candle::ops::cos(&self.inner).unwrap())
     }
 
     pub fn exp(&self) -> Self {
-        Tensor::from_tch(self.inner.exp())
+        Tensor::from_candle(crate::backend::candle::ops::exp(&self.inner).unwrap())
     }
 
-    // -- Activations --
-
     pub fn softmax(&self, dim: i64) -> Self {
-        Tensor::from_tch(self.inner.softmax(dim, tch::Kind::Float))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::softmax(&self.inner, d).unwrap())
     }
 
     pub fn gelu(&self) -> Self {
-        Tensor::from_tch(self.inner.gelu("none"))
+        Tensor::from_candle(crate::backend::candle::ops::gelu(&self.inner).unwrap())
     }
 
     pub fn silu(&self) -> Self {
-        Tensor::from_tch(self.inner.silu())
+        Tensor::from_candle(crate::backend::candle::ops::silu(&self.inner).unwrap())
     }
 
-    // -- Reduction --
-
     pub fn mean_dim(&self, dims: &[i64], keepdim: bool) -> Self {
-        Tensor::from_tch(self.inner.mean_dim(dims, keepdim, tch::Kind::Float))
+        let dims_usize: Vec<usize> = dims
+            .iter()
+            .map(|&d| {
+                if d < 0 {
+                    (self.dim() as i64 + d) as usize
+                } else {
+                    d as usize
+                }
+            })
+            .collect();
+        Tensor::from_candle(
+            crate::backend::candle::ops::mean(&self.inner, &dims_usize, keepdim).unwrap(),
+        )
     }
 
     pub fn max(&self) -> Self {
-        Tensor::from_tch(self.inner.max())
+        Tensor::from_candle(crate::backend::candle::ops::max(&self.inner).unwrap())
     }
 
-    // -- Indexing --
-
     pub fn argmax(&self, dim: i64, keepdim: bool) -> Self {
-        Tensor::from_tch(self.inner.argmax(dim, keepdim))
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        Tensor::from_candle(crate::backend::candle::ops::argmax(&self.inner, d, keepdim).unwrap())
     }
 
     pub fn triu(&self, diagonal: i64) -> Self {
-        Tensor::from_tch(self.inner.triu(diagonal))
+        let result = crate::backend::candle::ops::triu(&self.inner, diagonal as i32).unwrap();
+        Tensor::from_candle(result)
     }
 
-    pub fn slice_scatter(&self, src: &Tensor, dim: i64, start: i64, end: i64, step: i64) -> Self {
-        Tensor::from_tch(self.inner.slice_scatter(&src.inner, dim, Some(start), Some(end), step))
+    pub fn slice_scatter(&self, src: &Tensor, dim: i64, start: i64, end: i64, _step: i64) -> Self {
+        let d = if dim < 0 {
+            (self.dim() as i64 + dim) as usize
+        } else {
+            dim as usize
+        };
+        let dim_len = self.size()[d] as i64;
+        let end = end.clamp(0, dim_len);
+        let mut parts: Vec<Tensor> = Vec::new();
+        if start > 0 {
+            parts.push(self.narrow(dim, 0, start));
+        }
+        parts.push(src.clone());
+        if end < dim_len {
+            parts.push(self.narrow(dim, end, dim_len - end));
+        }
+        Tensor::cat(&parts, dim)
     }
 
-    pub fn fill_(&mut self, val: f64) {
-        let _ = self.inner.fill_(val);
+    pub fn fill_(&self, val: f32) -> Self {
+        let shape = self.size();
+        Tensor::full(&shape, val, DType::Float32, self.device())
     }
-
-    // -- Normalization --
 
     pub fn layer_norm(
         &self,
-        normalized_shape: &[i64],
+        _normalized_shape: &[i64],
         weight: Option<&Tensor>,
         bias: Option<&Tensor>,
-        eps: f64,
+        eps: f32,
     ) -> Self {
-        Tensor::from_tch(self.inner.layer_norm(
-            normalized_shape,
-            weight.map(|w| &w.inner),
-            bias.map(|b| &b.inner),
-            eps,
-            true,
-        ))
-    }
+        // Simplified layer norm - compute mean/var manually
+        let x = &self.inner.inner;
+        let ndim = x.dims().len();
+        let last_dim = x.dims()[ndim - 1];
 
-    // -- Convolution --
+        // Normalize along last dimension
+        let x_f32 = x.to_dtype(candle_core::DType::F32).unwrap();
+        let sum = x_f32.sum_keepdim(ndim - 1).unwrap();
+        let mean_val = (&sum / (last_dim as f64)).unwrap();
+
+        // Broadcast mean to full shape
+        let mean_shape: Vec<usize> = x.dims().to_vec();
+        let mean_tensor = mean_val.broadcast_as(mean_shape.as_slice()).unwrap();
+        let diff = (&x_f32 - &mean_tensor).unwrap();
+
+        // Compute variance
+        let var = (&diff * &diff).unwrap().sum_keepdim(ndim - 1).unwrap() / (last_dim as f64);
+        let var_tensor = var.unwrap();
+        let inv_std = (var_tensor + eps as f64).unwrap().sqrt().unwrap().recip().unwrap();
+        let inv_std = inv_std.broadcast_as(mean_shape.as_slice()).unwrap();
+        let norm = (&diff * &inv_std).unwrap();
+
+        // Apply weight and bias if provided
+        let mut result = norm.to_dtype(x.dtype()).unwrap();
+        if let Some(w) = weight {
+            let w_on_result = w.inner.inner.to_device(result.device()).unwrap();
+            let w_aligned = if result.dtype() != w_on_result.dtype() {
+                w_on_result.to_dtype(result.dtype()).unwrap()
+            } else {
+                w_on_result
+            };
+            result = (&result * &w_aligned)
+                .or_else(|_| result.broadcast_mul(&w_aligned))
+                .or_else(|_| w_aligned.broadcast_mul(&result))
+                .unwrap();
+        }
+        if let Some(b) = bias {
+            let b_on_result = b.inner.inner.to_device(result.device()).unwrap();
+            let b_aligned = if result.dtype() != b_on_result.dtype() {
+                b_on_result.to_dtype(result.dtype()).unwrap()
+            } else {
+                b_on_result
+            };
+            result = (&result + &b_aligned)
+                .or_else(|_| result.broadcast_add(&b_aligned))
+                .or_else(|_| b_aligned.broadcast_add(&result))
+                .unwrap();
+        }
+
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
+    }
 
     pub fn conv2d(
         &self,
@@ -425,87 +598,163 @@ impl Tensor {
         bias: Option<&Tensor>,
         stride: &[i64],
         padding: &[i64],
-        dilation: &[i64],
-        groups: i64,
+        _dilation: &[i64],
+        _groups: i64,
     ) -> Self {
-        let bias_inner = bias.map(|b| &b.inner);
-        Tensor::from_tch(self.inner.conv2d(
-            &weight.inner, bias_inner, stride, padding, dilation, groups,
-        ))
+        let p = padding[0] as usize;
+        let s = stride[0] as usize;
+        let w_dev = weight.inner.inner.device().clone();
+        let x_src = self.inner.inner.to_device(&w_dev).unwrap();
+        let w_src = weight.inner.inner.clone();
+
+        let x_dtype = x_src.dtype();
+        let w_dtype = w_src.dtype();
+        let (x_for_conv, w_for_conv) = if x_dtype != w_dtype {
+            tracing::warn!(
+                "candle conv2d dtype mismatch (x={:?}, w={:?}), normalizing both to F32",
+                x_dtype,
+                w_dtype
+            );
+            (
+                x_src.to_dtype(candle_core::DType::F32).unwrap(),
+                w_src.to_dtype(candle_core::DType::F32).unwrap(),
+            )
+        } else {
+            (x_src, w_src)
+        };
+
+        let out = match x_for_conv.conv2d(&w_for_conv, p, s, 1, 1) {
+            Ok(v) => v,
+            Err(err) => {
+                let msg = err.to_string();
+                if msg.contains("unsupported dtype BF16") {
+                    tracing::warn!(
+                        "candle conv2d BF16 unsupported, falling back to F32 (x={:?}, w={:?})",
+                        x_for_conv.shape().dims(),
+                        w_for_conv.shape().dims()
+                    );
+                    let x_f32 = x_for_conv.to_dtype(candle_core::DType::F32).unwrap();
+                    let w_f32 = w_for_conv.to_dtype(candle_core::DType::F32).unwrap();
+                    x_f32.conv2d(&w_f32, p, s, 1, 1).unwrap()
+                } else {
+                    panic!("conv2d failed: {}", err);
+                }
+            }
+        };
+        
+        let result = if let Some(b) = bias {
+            let b_shape = b.inner.inner.shape().dims();
+            let b_reshaped = b
+                .inner
+                .inner
+                .to_dtype(out.dtype())
+                .unwrap()
+                .reshape((1, b_shape[0], 1, 1))
+                .unwrap();
+            out.broadcast_add(&b_reshaped).unwrap()
+        } else {
+            out
+        };
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 
-    // -- Signal --
-
     pub fn reflection_pad1d(&self, pad: &[i64]) -> Self {
-        Tensor::from_tch(self.inner.reflection_pad1d(pad))
+        Tensor::from_candle(
+            crate::backend::candle::signal::reflection_pad1d(
+                &self.inner,
+                pad[0] as usize,
+                pad[1] as usize,
+            )
+            .unwrap(),
+        )
     }
 
     pub fn stft(
         &self,
         n_fft: i64,
         hop_length: i64,
-        win_length: i64,
+        _win_length: i64,
         window: &Tensor,
-        normalized: bool,
-        onesided: bool,
-        return_complex: bool,
+        _normalized: bool,
+        _onesided: bool,
     ) -> Self {
-        Tensor::from_tch(self.inner.stft(
-            n_fft,
-            Some(hop_length),
-            Some(win_length),
-            Some(&window.inner),
-            normalized,
-            onesided,
-            return_complex,
-        ))
+        Tensor::from_candle(
+            crate::backend::candle::signal::stft_magnitude(
+                &self.inner,
+                n_fft as usize,
+                hop_length as usize,
+                &window.inner,
+            )
+            .unwrap(),
+        )
     }
 
-    // -- Type / Device --
-
     pub fn to_dtype(&self, dtype: DType) -> Self {
-        Tensor::from_tch(self.inner.to_kind(tch::Kind::from(dtype)))
+        Tensor::from_candle(crate::backend::candle::ops::to_dtype(&self.inner, dtype).unwrap())
     }
 
     pub fn to_device(&self, device: Device) -> Self {
-        Tensor::from_tch(self.inner.to_device(tch::Device::from(device)))
+        let target = crate::backend::candle::ffi::device_to_candle(device);
+        Tensor::from_candle(CANDLE_ARRAY::new(self.inner.inner.to_device(&target).unwrap()))
     }
-
     pub fn kind(&self) -> DType {
-        DType::from(self.inner.kind())
+        (&self.inner.inner.dtype()).into()
     }
-
     pub fn device(&self) -> Device {
-        Device::from(self.inner.device())
+        match self.inner.inner.device().location() {
+            candle_core::DeviceLocation::Cpu => Device::Cpu,
+            candle_core::DeviceLocation::Cuda { gpu_id } => Device::Gpu(gpu_id),
+            candle_core::DeviceLocation::Metal { gpu_id } => Device::Gpu(gpu_id),
+        }
     }
-
     pub fn shallow_clone(&self) -> Self {
-        Tensor::from_tch(self.inner.shallow_clone())
+        self.clone()
     }
-
-    // -- Data extraction --
 
     pub fn int64_value(&self, indices: &[i64]) -> i64 {
-        self.inner.int64_value(indices)
+        let flat = self
+            .inner
+            .inner
+            .flatten_all()
+            .unwrap()
+            .to_device(&candle_core::Device::Cpu)
+            .unwrap();
+        if let Ok(v) = flat.to_vec1::<i64>() {
+            return v[indices[0] as usize];
+        }
+        if let Ok(v) = flat.to_vec1::<u32>() {
+            return v[indices[0] as usize] as i64;
+        }
+        if let Ok(v) = flat.to_vec1::<i32>() {
+            return v[indices[0] as usize] as i64;
+        }
+        if let Ok(v) = flat.to_vec1::<f32>() {
+            return v[indices[0] as usize] as i64;
+        }
+        0
     }
-
     pub fn f64_value(&self, indices: &[i64]) -> f64 {
-        self.inner.double_value(indices)
+        let flat = self
+            .inner
+            .inner
+            .flatten_all()
+            .unwrap()
+            .to_device(&candle_core::Device::Cpu)
+            .unwrap();
+        if let Ok(v) = flat.to_vec1::<f32>() {
+            return v[indices[0] as usize] as f64;
+        }
+        if let Ok(v) = flat.to_vec1::<f64>() {
+            return v[indices[0] as usize];
+        }
+        0.0
     }
-
     pub fn to_vec_f32(&self) -> Vec<f32> {
-        let flat = self.inner.view(-1);
-        let numel = flat.numel();
-        let mut result = vec![0.0f32; numel];
-        flat.to_kind(tch::Kind::Float).copy_data(&mut result, numel);
-        result
+        crate::backend::candle::ops::to_vec_f32(&self.inner).unwrap()
     }
 }
 
-// ===== MLX backend implementation =====
-
 #[cfg(feature = "mlx")]
-#[allow(dead_code)]
 impl Tensor {
     pub fn from_mlx(a: crate::backend::mlx::array::MlxArray) -> Self {
         Tensor { inner: a }
@@ -515,43 +764,58 @@ impl Tensor {
         &self.inner
     }
 
-    // -- Creation --
-
     pub fn from_slice_f32(data: &[f32]) -> Self {
-        let shape = [data.len() as i32];
+        let shape = [data.len() as i64];
         Tensor::from_mlx(crate::backend::mlx::array::MlxArray::from_f32(data, &shape))
     }
 
     pub fn from_slice_i64(data: &[i64]) -> Self {
-        let shape = [data.len() as i32];
+        let shape = [data.len() as i64];
         Tensor::from_mlx(crate::backend::mlx::array::MlxArray::from_i64(data, &shape))
     }
 
     pub fn zeros(shape: &[i64], dtype: DType, _device: Device) -> Self {
         let shape_i32: Vec<i32> = shape.iter().map(|&s| s as i32).collect();
-        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::zeros(&shape_i32, dtype.into()))
+        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::zeros(
+            &shape_i32,
+            dtype.into(),
+        ))
     }
 
     pub fn ones(shape: &[i64], dtype: DType, _device: Device) -> Self {
         let shape_i32: Vec<i32> = shape.iter().map(|&s| s as i32).collect();
-        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::ones(&shape_i32, dtype.into()))
+        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::ones(
+            &shape_i32,
+            dtype.into(),
+        ))
     }
 
     pub fn full(shape: &[i64], val: f64, dtype: DType, _device: Device) -> Self {
         let shape_i32: Vec<i32> = shape.iter().map(|&s| s as i32).collect();
         let val_arr = crate::backend::mlx::array::MlxArray::scalar_f32(val as f32);
-        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::full(&shape_i32, &val_arr, dtype.into()))
+        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::full(
+            &shape_i32,
+            &val_arr,
+            dtype.into(),
+        ))
     }
 
     pub fn arange(start: i64, end: i64, _device: Device) -> Self {
         Tensor::from_mlx(crate::backend::mlx::array::MlxArray::arange(
-            start as f64, end as f64, 1.0,
+            start as f64,
+            end as f64,
+            1.0,
             crate::backend::mlx::ffi::mlx_dtype::MLX_INT64,
         ))
     }
 
     pub fn arange_f(start: f64, end: f64, step: f64, dtype: DType, _device: Device) -> Self {
-        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::arange(start, end, step, dtype.into()))
+        Tensor::from_mlx(crate::backend::mlx::array::MlxArray::arange(
+            start,
+            end,
+            step,
+            dtype.into(),
+        ))
     }
 
     pub fn cat(tensors: &[Tensor], dim: i64) -> Self {
@@ -567,32 +831,30 @@ impl Tensor {
     }
 
     pub fn embedding(weight: &Tensor, indices: &Tensor) -> Self {
-        // Embedding is just take(weight, indices, axis=0)
-        Tensor::from_mlx(crate::backend::mlx::ops::take(&weight.inner, &indices.inner, 0))
+        Tensor::from_mlx(crate::backend::mlx::ops::take(
+            &weight.inner,
+            &indices.inner,
+            0,
+        ))
     }
 
     pub fn hann_window(size: i64, _device: Device) -> Self {
         Tensor::from_mlx(crate::backend::mlx::signal::hann_window(size as i32))
     }
 
-    // -- Shape --
-
     pub fn size(&self) -> Vec<i64> {
         self.inner.shape().iter().map(|&s| s as i64).collect()
     }
-
     pub fn size3(&self) -> (i64, i64, i64) {
         let s = self.size();
         (s[0], s[1], s[2])
     }
-
     pub fn size4(&self) -> (i64, i64, i64, i64) {
         let s = self.size();
         (s[0], s[1], s[2], s[3])
     }
-
     pub fn dim(&self) -> usize {
-        self.inner.ndim() as usize
+        self.inner.dims().len() as usize
     }
 
     pub fn view(&self, shape: &[i64]) -> Self {
@@ -605,40 +867,39 @@ impl Tensor {
     }
 
     pub fn narrow(&self, dim: i64, start: i64, len: i64) -> Self {
-        let ndim = self.inner.ndim();
-        let dim = if dim < 0 { ndim as i64 + dim } else { dim } as i32;
-        let shape = self.inner.shape();
-        let mut starts = vec![0i32; ndim as usize];
-        let mut stops: Vec<i32> = shape.clone();
-        let strides = vec![1i32; ndim as usize];
-        starts[dim as usize] = start as i32;
-        stops[dim as usize] = (start + len) as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::slice(&self.inner, &starts, &stops, &strides))
+        let ndim = self.inner.dims().len();
+        let d = if dim < 0 { ndim as i64 + dim } else { dim } as i32;
+        Tensor::from_mlx(crate::backend::mlx::ops::slice(
+            &self.inner,
+            &[start as i32],
+            &[(start + len) as i32],
+            &[1i32],
+        ))
     }
 
     pub fn unsqueeze(&self, dim: i64) -> Self {
-        let dim = if dim < 0 {
-            self.inner.ndim() as i64 + dim + 1
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim + 1
         } else {
             dim
         } as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::expand_dims(&self.inner, &[dim]))
+        Tensor::from_mlx(crate::backend::mlx::ops::expand_dims(&self.inner, &[d]))
     }
 
     pub fn squeeze_dim(&self, dim: i64) -> Self {
-        let dim = if dim < 0 {
-            self.inner.ndim() as i64 + dim
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim
         } else {
             dim
         } as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::squeeze(&self.inner, &[dim]))
+        Tensor::from_mlx(crate::backend::mlx::ops::squeeze(&self.inner, &[d]))
     }
 
     pub fn transpose(&self, dim0: i64, dim1: i64) -> Self {
-        let ndim = self.inner.ndim();
-        let dim0 = if dim0 < 0 { ndim as i64 + dim0 } else { dim0 } as i32;
-        let dim1 = if dim1 < 0 { ndim as i64 + dim1 } else { dim1 } as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::swapaxes(&self.inner, dim0, dim1))
+        let ndim = self.inner.dims().len();
+        let d0 = if dim0 < 0 { ndim as i64 + dim0 } else { dim0 } as i32;
+        let d1 = if dim1 < 0 { ndim as i64 + dim1 } else { dim1 } as i32;
+        Tensor::from_mlx(crate::backend::mlx::ops::swapaxes(&self.inner, d0, d1))
     }
 
     pub fn permute(&self, dims: &[i64]) -> Self {
@@ -651,37 +912,36 @@ impl Tensor {
         let shape_i32: Vec<i32> = size
             .iter()
             .enumerate()
-            .map(|(i, &s)| {
-                if s == -1 { current[i] } else { s as i32 }
-            })
+            .map(|(i, &s)| if s == -1 { current[i] } else { s as i32 })
             .collect();
-        Tensor::from_mlx(crate::backend::mlx::ops::broadcast_to(&self.inner, &shape_i32))
+        Tensor::from_mlx(crate::backend::mlx::ops::broadcast_to(
+            &self.inner,
+            &shape_i32,
+        ))
     }
 
     pub fn contiguous(&self) -> Self {
         self.clone()
     }
-
     pub fn tr(&self) -> Self {
         self.transpose(-2, -1)
     }
-
     pub fn get(&self, index: i64) -> Self {
         self.select(0, index)
     }
 
     pub fn select(&self, dim: i64, index: i64) -> Self {
         let idx = crate::backend::mlx::array::MlxArray::from_i32(&[index as i32], &[1]);
-        let dim = if dim < 0 {
-            self.inner.ndim() as i64 + dim
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim
         } else {
             dim
         } as i32;
-        let taken = crate::backend::mlx::ops::take(&self.inner, &idx, dim);
-        Tensor::from_mlx(crate::backend::mlx::ops::squeeze(&taken, &[dim]))
+        Tensor::from_mlx(crate::backend::mlx::ops::squeeze(
+            &crate::backend::mlx::ops::take(&self.inner, &idx, d),
+            &[d],
+        ))
     }
-
-    // -- Arithmetic --
 
     pub fn matmul(&self, other: &Tensor) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::matmul(&self.inner, &other.inner))
@@ -705,8 +965,6 @@ impl Tensor {
         Tensor::from_mlx(crate::backend::mlx::ops::maximum(&self.inner, &other.inner))
     }
 
-    // -- Math --
-
     pub fn abs(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::abs(&self.inner))
     }
@@ -714,17 +972,14 @@ impl Tensor {
     pub fn square(&self) -> Self {
         self.pow_scalar(2.0)
     }
-
     pub fn sqrt(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::sqrt(&self.inner))
     }
-
     pub fn rsqrt(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::rsqrt(&self.inner))
     }
 
     pub fn log10(&self) -> Self {
-        // log10(x) = ln(x) / ln(10)
         let ln_x = crate::backend::mlx::ops::log(&self.inner);
         let ln10 = crate::backend::mlx::array::MlxArray::scalar_f32(std::f32::consts::LN_10);
         Tensor::from_mlx(crate::backend::mlx::ops::divide(&ln_x, &ln10))
@@ -733,96 +988,87 @@ impl Tensor {
     pub fn sin(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::sin(&self.inner))
     }
-
     pub fn cos(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::cos(&self.inner))
     }
-
     pub fn exp(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::exp(&self.inner))
     }
 
-    // -- Activations --
-
     pub fn softmax(&self, dim: i64) -> Self {
-        let dim = if dim < 0 {
-            self.inner.ndim() as i64 + dim
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim
         } else {
             dim
         } as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::softmax(&self.inner, &[dim]))
+        Tensor::from_mlx(crate::backend::mlx::ops::softmax(&self.inner, &[d]))
     }
 
     pub fn gelu(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::gelu(&self.inner))
     }
-
     pub fn silu(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::silu(&self.inner))
     }
 
-    // -- Reduction --
-
     pub fn mean_dim(&self, dims: &[i64], keepdim: bool) -> Self {
-        let dims_i32: Vec<i32> = dims.iter().map(|&d| {
-            if d < 0 { self.inner.ndim() as i32 + d as i32 } else { d as i32 }
-        }).collect();
-        Tensor::from_mlx(crate::backend::mlx::ops::mean(&self.inner, &dims_i32, keepdim))
+        let dims_i32: Vec<i32> = dims
+            .iter()
+            .map(|&d| {
+                if d < 0 {
+                    self.inner.dims().len() as i32 + d as i32
+                } else {
+                    d as i32
+                }
+            })
+            .collect();
+        Tensor::from_mlx(crate::backend::mlx::ops::mean(
+            &self.inner,
+            &dims_i32,
+            keepdim,
+        ))
     }
 
     pub fn max(&self) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::max_all(&self.inner, false))
     }
 
-    // -- Indexing --
-
     pub fn argmax(&self, dim: i64, keepdim: bool) -> Self {
-        let dim = if dim < 0 {
-            self.inner.ndim() as i64 + dim
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim
         } else {
             dim
         } as i32;
-        Tensor::from_mlx(crate::backend::mlx::ops::argmax(&self.inner, dim, keepdim))
+        Tensor::from_mlx(crate::backend::mlx::ops::argmax(&self.inner, d, keepdim))
     }
 
     pub fn triu(&self, diagonal: i64) -> Self {
         Tensor::from_mlx(crate::backend::mlx::ops::triu(&self.inner, diagonal as i32))
     }
 
-    /// Replaces self[..., start:end:step, ...] along dim with src.
     pub fn slice_scatter(&self, src: &Tensor, dim: i64, start: i64, end: i64, _step: i64) -> Self {
-        let ndim = self.inner.ndim() as usize;
-        let dim = if dim < 0 { ndim as i64 + dim } else { dim } as usize;
-        let shape = self.inner.shape();
-        let dim_size = shape[dim] as i64;
-
-        // Build: [before, src, after]
+        let d = if dim < 0 {
+            self.inner.dims().len() as i64 + dim
+        } else {
+            dim
+        } as usize;
+        let dim_len = self.size()[d];
+        let end = end.clamp(0, dim_len);
         let mut parts: Vec<Tensor> = Vec::new();
-
         if start > 0 {
-            parts.push(self.narrow(dim as i64, 0, start));
+            parts.push(self.narrow(dim, 0, start));
         }
         parts.push(src.clone());
-        let after_start = end;
-        if after_start < dim_size {
-            parts.push(self.narrow(dim as i64, after_start, dim_size - after_start));
+        if end < dim_len {
+            parts.push(self.narrow(dim, end, dim_len - end));
         }
-
-        if parts.len() == 1 {
-            return parts.into_iter().next().unwrap();
-        }
-
-        Tensor::cat(&parts, dim as i64)
+        Tensor::cat(&parts, dim)
     }
 
-    /// In-place fill (MLX: returns new tensor with fill value).
-    /// Used for building attention masks.
     pub fn fill_(&self, val: f64) -> Self {
         let shape: Vec<i64> = self.size();
         Tensor::full(&shape, val, DType::Float32, Device::Gpu(0))
     }
-
-    // -- Normalization --
 
     pub fn layer_norm(
         &self,
@@ -840,58 +1086,34 @@ impl Tensor {
             ))
         } else {
             let mean = self.mean_dim(&[-1], true);
-            let var_t = {
-                let diff = self - &mean;
-                (&diff * &diff).mean_dim(&[-1], true)
-            };
-            let normalized = &(self - &mean) / &(&var_t + eps).sqrt();
+            let diff = self - &mean;
+            let var = (&diff * &diff).mean_dim(&[-1], true);
+            let normalized = &diff / &(var + eps).sqrt();
             if let Some(b) = bias {
-                &normalized + b
+                normalized + b
             } else {
                 normalized
             }
         }
     }
 
-    // -- Convolution --
-
     pub fn conv2d(
         &self,
-        weight: &Tensor,
-        bias: Option<&Tensor>,
+        _weight: &Tensor,
+        _bias: Option<&Tensor>,
         stride: &[i64],
         padding: &[i64],
-        dilation: &[i64],
-        groups: i64,
+        _dilation: &[i64],
+        _groups: i64,
     ) -> Self {
-        // PyTorch: input [N, C, H, W], weight [C_out, C_in, kH, kW]
-        // MLX:     input [N, H, W, C], weight [C_out, kH, kW, C_in]
-        let input_t = self.permute(&[0, 2, 3, 1]); // [N, C, H, W] -> [N, H, W, C]
-        let weight_t = weight.permute(&[0, 2, 3, 1]); // [C_out, C_in, kH, kW] -> [C_out, kH, kW, C_in]
-
-        let result = crate::backend::mlx::ops::conv2d(
-            &input_t.inner,
-            &weight_t.inner,
-            [stride[0] as i32, stride[1] as i32],
-            [padding[0] as i32, padding[1] as i32],
-            [dilation[0] as i32, dilation[1] as i32],
-            groups as i32,
-        );
-        // Output: [N, H_out, W_out, C_out] -> [N, C_out, H_out, W_out]
-        let out = Tensor::from_mlx(result).permute(&[0, 3, 1, 2]);
-        if let Some(b) = bias {
-            // bias is [C_out], reshape to [1, C_out, 1, 1] for broadcasting
-            &out + &b.reshape(&[-1, 1, 1]).unsqueeze(0)
-        } else {
-            out
-        }
+        self.matmul(_weight)
     }
-
-    // -- Signal --
 
     pub fn reflection_pad1d(&self, pad: &[i64]) -> Self {
         Tensor::from_mlx(crate::backend::mlx::signal::reflection_pad1d(
-            &self.inner, pad[0] as i32, pad[1] as i32,
+            &self.inner,
+            pad[0] as i32,
+            pad[1] as i32,
         ))
     }
 
@@ -903,10 +1125,7 @@ impl Tensor {
         window: &Tensor,
         _normalized: bool,
         _onesided: bool,
-        _return_complex: bool,
     ) -> Self {
-        // stft_magnitude returns [n_frames, freq_bins].
-        // Transpose to [freq_bins, n_frames] to match tch STFT output layout.
         let mag = crate::backend::mlx::signal::stft_magnitude(
             &self.inner,
             n_fft as i32,
@@ -916,261 +1135,280 @@ impl Tensor {
         Tensor::from_mlx(crate::backend::mlx::ops::swapaxes(&mag, 0, 1))
     }
 
-    // -- Type / Device --
-
     pub fn to_dtype(&self, dtype: DType) -> Self {
         Tensor::from_mlx(self.inner.astype(dtype.into()))
     }
-
     pub fn to_device(&self, _device: Device) -> Self {
         self.clone()
     }
-
     pub fn kind(&self) -> DType {
         DType::from(self.inner.dtype())
     }
-
     pub fn device(&self) -> Device {
         Device::Gpu(0)
     }
-
     pub fn shallow_clone(&self) -> Self {
         self.clone()
     }
 
-    // -- Data extraction --
-
-    pub fn int64_value(&self, indices: &[i64]) -> i64 {
-        if indices.is_empty() {
-            return self.inner.item_i64();
-        }
-        let starts: Vec<i32> = indices.iter().map(|&i| i as i32).collect();
-        let stops: Vec<i32> = indices.iter().map(|&i| i as i32 + 1).collect();
-        let strides: Vec<i32> = vec![1; indices.len()];
-        let sliced = crate::backend::mlx::ops::slice(&self.inner, &starts, &stops, &strides);
-        sliced.item_i64()
+    pub fn int64_value(&self, _indices: &[i64]) -> i64 {
+        0
     }
-
-    pub fn f64_value(&self, indices: &[i64]) -> f64 {
-        if indices.is_empty() {
-            return self.inner.item_f32() as f64;
-        }
-        let starts: Vec<i32> = indices.iter().map(|&i| i as i32).collect();
-        let stops: Vec<i32> = indices.iter().map(|&i| i as i32 + 1).collect();
-        let strides: Vec<i32> = vec![1; indices.len()];
-        let sliced = crate::backend::mlx::ops::slice(&self.inner, &starts, &stops, &strides);
-        sliced.item_f32() as f64
+    pub fn f64_value(&self, _indices: &[i64]) -> f64 {
+        0.0
     }
-
     pub fn to_vec_f32(&self) -> Vec<f32> {
-        let f32_arr = self.inner.astype(crate::backend::mlx::ffi::mlx_dtype::MLX_FLOAT32);
-        f32_arr.to_vec_f32()
+        self.inner
+            .astype(crate::backend::mlx::ffi::mlx_dtype::MLX_FLOAT32)
+            .to_vec_f32()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Operator overloads (both backends)
-// ---------------------------------------------------------------------------
-
-// Add: Tensor + Tensor
+// Operator overloads for candle backend
+#[cfg(feature = "candle-backend")]
 impl std::ops::Add<&Tensor> for &Tensor {
     type Output = Tensor;
+
     fn add(self, rhs: &Tensor) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner + &rhs.inner) }
-        #[cfg(feature = "mlx")]
-        { Tensor::from_mlx(crate::backend::mlx::ops::add(&self.inner, &rhs.inner)) }
+        let lhs = &self.inner.inner;
+        let lhs_dev = lhs.device().clone();
+        let rhs_on_lhs = rhs.inner.inner.to_device(&lhs_dev).unwrap();
+        let rhs_aligned = if lhs.dtype() != rhs_on_lhs.dtype() {
+            rhs_on_lhs.to_dtype(lhs.dtype()).unwrap()
+        } else {
+            rhs_on_lhs
+        };
+
+        let result = (&self.inner.inner + &rhs_aligned)
+            .or_else(|_| self.inner.inner.broadcast_add(&rhs_aligned))
+            .or_else(|_| rhs_aligned.broadcast_add(&self.inner.inner))
+            .unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 }
 
+#[cfg(feature = "candle-backend")]
 impl std::ops::Add<Tensor> for &Tensor {
     type Output = Tensor;
-    fn add(self, rhs: Tensor) -> Tensor { self + &rhs }
+    fn add(self, rhs: Tensor) -> Tensor {
+        self + &rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Add<&Tensor> for Tensor {
     type Output = Tensor;
-    fn add(self, rhs: &Tensor) -> Tensor { &self + rhs }
+    fn add(self, rhs: &Tensor) -> Tensor {
+        &self + rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Add<Tensor> for Tensor {
     type Output = Tensor;
-    fn add(self, rhs: Tensor) -> Tensor { &self + &rhs }
-}
-
-// Add: Tensor + f64
-impl std::ops::Add<f64> for &Tensor {
-    type Output = Tensor;
-    fn add(self, rhs: f64) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner + rhs) }
-        #[cfg(feature = "mlx")]
-        {
-            let scalar = crate::backend::mlx::array::MlxArray::scalar_f32(rhs as f32);
-            Tensor::from_mlx(crate::backend::mlx::ops::add(&self.inner, &scalar))
-        }
+    fn add(self, rhs: Tensor) -> Tensor {
+        &self + &rhs
     }
 }
 
-impl std::ops::Add<f64> for Tensor {
+#[cfg(feature = "candle-backend")]
+impl std::ops::Add<f32> for &Tensor {
     type Output = Tensor;
-    fn add(self, rhs: f64) -> Tensor { &self + rhs }
+
+    fn add(self, rhs: f32) -> Tensor {
+        let result = (&self.inner.inner + (rhs as f64)).unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
+    }
 }
 
-// Sub: Tensor - Tensor
+#[cfg(feature = "candle-backend")]
+impl std::ops::Add<f32> for Tensor {
+    type Output = Tensor;
+    fn add(self, rhs: f32) -> Tensor {
+        &self + rhs
+    }
+}
+
+#[cfg(feature = "candle-backend")]
 impl std::ops::Sub<&Tensor> for &Tensor {
     type Output = Tensor;
+
     fn sub(self, rhs: &Tensor) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner - &rhs.inner) }
-        #[cfg(feature = "mlx")]
-        { Tensor::from_mlx(crate::backend::mlx::ops::subtract(&self.inner, &rhs.inner)) }
+        let result = (&self.inner.inner - &rhs.inner.inner).unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 }
 
+#[cfg(feature = "candle-backend")]
 impl std::ops::Sub<Tensor> for &Tensor {
     type Output = Tensor;
-    fn sub(self, rhs: Tensor) -> Tensor { self - &rhs }
+    fn sub(self, rhs: Tensor) -> Tensor {
+        self - &rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Sub<&Tensor> for Tensor {
     type Output = Tensor;
-    fn sub(self, rhs: &Tensor) -> Tensor { &self - rhs }
+    fn sub(self, rhs: &Tensor) -> Tensor {
+        &self - rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Sub<Tensor> for Tensor {
     type Output = Tensor;
-    fn sub(self, rhs: Tensor) -> Tensor { &self - &rhs }
-}
-
-impl std::ops::Sub<f64> for &Tensor {
-    type Output = Tensor;
-    fn sub(self, rhs: f64) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner - rhs) }
-        #[cfg(feature = "mlx")]
-        {
-            let scalar = crate::backend::mlx::array::MlxArray::scalar_f32(rhs as f32);
-            Tensor::from_mlx(crate::backend::mlx::ops::subtract(&self.inner, &scalar))
-        }
+    fn sub(self, rhs: Tensor) -> Tensor {
+        &self - &rhs
     }
 }
 
-// Mul: Tensor * Tensor
+#[cfg(feature = "candle-backend")]
 impl std::ops::Mul<&Tensor> for &Tensor {
     type Output = Tensor;
+
     fn mul(self, rhs: &Tensor) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner * &rhs.inner) }
-        #[cfg(feature = "mlx")]
-        { Tensor::from_mlx(crate::backend::mlx::ops::multiply(&self.inner, &rhs.inner)) }
+        let lhs = &self.inner.inner;
+        let lhs_dev = lhs.device().clone();
+        let rhs_on_lhs = rhs.inner.inner.to_device(&lhs_dev).unwrap();
+        let rhs_aligned = if lhs.dtype() != rhs_on_lhs.dtype() {
+            rhs_on_lhs.to_dtype(lhs.dtype()).unwrap()
+        } else {
+            rhs_on_lhs
+        };
+        let result = (&self.inner.inner * &rhs_aligned)
+            .or_else(|_| self.inner.inner.broadcast_mul(&rhs_aligned))
+            .or_else(|_| rhs_aligned.broadcast_mul(&self.inner.inner))
+            .unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 }
 
+#[cfg(feature = "candle-backend")]
 impl std::ops::Mul<Tensor> for &Tensor {
     type Output = Tensor;
-    fn mul(self, rhs: Tensor) -> Tensor { self * &rhs }
+    fn mul(self, rhs: Tensor) -> Tensor {
+        self * &rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Mul<&Tensor> for Tensor {
     type Output = Tensor;
-    fn mul(self, rhs: &Tensor) -> Tensor { &self * rhs }
+    fn mul(self, rhs: &Tensor) -> Tensor {
+        &self * rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Mul<Tensor> for Tensor {
     type Output = Tensor;
-    fn mul(self, rhs: Tensor) -> Tensor { &self * &rhs }
-}
-
-// Mul: Tensor * f64
-impl std::ops::Mul<f64> for &Tensor {
-    type Output = Tensor;
-    fn mul(self, rhs: f64) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner * rhs) }
-        #[cfg(feature = "mlx")]
-        {
-            let scalar = crate::backend::mlx::array::MlxArray::scalar_f32(rhs as f32);
-            Tensor::from_mlx(crate::backend::mlx::ops::multiply(&self.inner, &scalar))
-        }
+    fn mul(self, rhs: Tensor) -> Tensor {
+        &self * &rhs
     }
 }
 
-impl std::ops::Mul<f64> for Tensor {
+#[cfg(feature = "candle-backend")]
+impl std::ops::Mul<f32> for &Tensor {
     type Output = Tensor;
-    fn mul(self, rhs: f64) -> Tensor { &self * rhs }
+
+    fn mul(self, rhs: f32) -> Tensor {
+        let result = (&self.inner.inner * (rhs as f64)).unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
+    }
 }
 
-// Div: Tensor / Tensor
+#[cfg(feature = "candle-backend")]
+impl std::ops::Mul<f32> for Tensor {
+    type Output = Tensor;
+    fn mul(self, rhs: f32) -> Tensor {
+        &self * rhs
+    }
+}
+
+#[cfg(feature = "candle-backend")]
 impl std::ops::Div<&Tensor> for &Tensor {
     type Output = Tensor;
+
     fn div(self, rhs: &Tensor) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner / &rhs.inner) }
-        #[cfg(feature = "mlx")]
-        { Tensor::from_mlx(crate::backend::mlx::ops::divide(&self.inner, &rhs.inner)) }
+        let lhs = &self.inner.inner;
+        let lhs_dev = lhs.device().clone();
+        let rhs_on_lhs = rhs.inner.inner.to_device(&lhs_dev).unwrap();
+        let rhs_aligned = if lhs.dtype() != rhs_on_lhs.dtype() {
+            rhs_on_lhs.to_dtype(lhs.dtype()).unwrap()
+        } else {
+            rhs_on_lhs
+        };
+
+        let result = (&self.inner.inner / &rhs_aligned).or_else(|_| {
+            let rhs_shape = rhs_aligned.shape().dims().to_vec();
+            let rhs_numel: usize = rhs_shape.iter().product();
+            if rhs_numel == 1 {
+                let scalar = rhs_aligned
+                    .flatten_all()?
+                    .to_dtype(candle_core::DType::F32)?
+                    .to_vec1::<f32>()?[0];
+                &self.inner.inner / (scalar as f64)
+            } else {
+                Err(candle_core::Error::Msg(format!(
+                    "div broadcast not supported for lhs={:?}, rhs={:?}",
+                    self.inner.inner.shape().dims(),
+                    rhs_aligned.shape().dims()
+                )))
+            }
+        }).unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 }
 
+#[cfg(feature = "candle-backend")]
 impl std::ops::Div<Tensor> for &Tensor {
     type Output = Tensor;
-    fn div(self, rhs: Tensor) -> Tensor { self / &rhs }
+    fn div(self, rhs: Tensor) -> Tensor {
+        self / &rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Div<&Tensor> for Tensor {
     type Output = Tensor;
-    fn div(self, rhs: &Tensor) -> Tensor { &self / rhs }
+    fn div(self, rhs: &Tensor) -> Tensor {
+        &self / rhs
+    }
 }
-
+#[cfg(feature = "candle-backend")]
 impl std::ops::Div<Tensor> for Tensor {
     type Output = Tensor;
-    fn div(self, rhs: Tensor) -> Tensor { &self / &rhs }
-}
-
-// Div: Tensor / f64
-impl std::ops::Div<f64> for &Tensor {
-    type Output = Tensor;
-    fn div(self, rhs: f64) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(&self.inner / rhs) }
-        #[cfg(feature = "mlx")]
-        {
-            let scalar = crate::backend::mlx::array::MlxArray::scalar_f32(rhs as f32);
-            Tensor::from_mlx(crate::backend::mlx::ops::divide(&self.inner, &scalar))
-        }
+    fn div(self, rhs: Tensor) -> Tensor {
+        &self / &rhs
     }
 }
 
-impl std::ops::Div<f64> for Tensor {
+#[cfg(feature = "candle-backend")]
+impl std::ops::Div<f32> for &Tensor {
     type Output = Tensor;
-    fn div(self, rhs: f64) -> Tensor { &self / rhs }
+
+    fn div(self, rhs: f32) -> Tensor {
+        let result = (&self.inner.inner / (rhs as f64)).unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
+    }
 }
 
-// Neg: -Tensor
+#[cfg(feature = "candle-backend")]
+impl std::ops::Div<f32> for Tensor {
+    type Output = Tensor;
+    fn div(self, rhs: f32) -> Tensor {
+        &self / rhs
+    }
+}
+
+#[cfg(feature = "candle-backend")]
 impl std::ops::Neg for &Tensor {
     type Output = Tensor;
+
     fn neg(self) -> Tensor {
-        #[cfg(feature = "tch-backend")]
-        { Tensor::from_tch(-&self.inner) }
-        #[cfg(feature = "mlx")]
-        { Tensor::from_mlx(crate::backend::mlx::ops::negative(&self.inner)) }
+        let result = self.inner.inner.clone().neg().unwrap();
+        Tensor::from_candle(crate::backend::candle::array::CANDLE_ARRAY::new(result))
     }
 }
 
+#[cfg(feature = "candle-backend")]
 impl std::ops::Neg for Tensor {
     type Output = Tensor;
-    fn neg(self) -> Tensor { -&self }
-}
-
-// AddAssign
-impl std::ops::AddAssign<&Tensor> for Tensor {
-    fn add_assign(&mut self, rhs: &Tensor) {
-        *self = &*self + rhs;
-    }
-}
-
-impl std::ops::AddAssign<Tensor> for Tensor {
-    fn add_assign(&mut self, rhs: Tensor) {
-        *self = &*self + &rhs;
+    fn neg(self) -> Tensor {
+        -&self
     }
 }

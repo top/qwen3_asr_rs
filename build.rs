@@ -1,10 +1,11 @@
 // Build script for qwen3_asr.
 //
-// When the `mlx` feature is enabled (macOS only), this script:
-// 1. Builds the mlx-c library from the git submodule via CMake
-// 2. Emits linker directives for mlx-c, MLX, Metal, and system frameworks
+// Currently no special build steps required.
+// Candle backend uses standard Rust compilation with optional CUDA support.
 
 fn main() {
+    // No-op - Candle is compiled via cargo dependencies
+
     #[cfg(feature = "mlx")]
     build_mlx();
 }

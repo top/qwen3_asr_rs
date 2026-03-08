@@ -1,14 +1,11 @@
 // Ensure exactly one backend is selected
-#[cfg(all(feature = "tch-backend", feature = "mlx"))]
-compile_error!("Features 'tch-backend' and 'mlx' are mutually exclusive");
+#[cfg(all(feature = "candle-backend", feature = "mlx"))]
+compile_error!("Features 'candle-backend' and 'mlx' are mutually exclusive");
 
-#[cfg(not(any(feature = "tch-backend", feature = "mlx")))]
-compile_error!("Either 'tch-backend' or 'mlx' feature must be enabled");
+#[cfg(not(any(feature = "candle-backend", feature = "mlx")))]
+compile_error!("Either 'candle-backend' or 'mlx' feature must be enabled");
 
 pub mod tensor;
-#[cfg(feature = "mlx")]
-pub mod backend;
-
 pub mod audio;
 pub mod audio_encoder;
 pub mod config;
@@ -21,3 +18,13 @@ pub mod server;
 pub mod text_decoder;
 pub mod tokenizer;
 pub mod weights;
+
+#[cfg(feature = "candle-backend")]
+pub mod backend {
+    pub mod candle;
+}
+
+#[cfg(feature = "mlx")]
+pub mod backend {
+    pub mod mlx;
+}

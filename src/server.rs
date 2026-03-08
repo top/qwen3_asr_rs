@@ -63,6 +63,7 @@ async fn transcribe_handler(
     let mut audio_bytes: Option<Vec<u8>> = None;
     let mut audio_filename: Option<String> = None;
     let mut language: Option<String> = state.default_language.clone();
+    let mut stream = false;
 
     // Parse multipart fields
     while let Some(item) = payload.next().await {
@@ -117,6 +118,18 @@ async fn transcribe_handler(
                     }
                 }
             }
+            "stream" => {
+                let mut buf = Vec::new();
+                while let Some(chunk) = field.next().await {
+                    if let Ok(data) = chunk {
+                        buf.extend_from_slice(&data);
+                    }
+                }
+                if let Ok(val) = String::from_utf8(buf) {
+                    let v = val.trim().to_ascii_lowercase();
+                    stream = v == "true" || v == "1";
+                }
+            }
             _ => {
                 // Skip unknown fields
                 while field.next().await.is_some() {}
@@ -156,7 +169,22 @@ async fn transcribe_handler(
         );
     }
 
-    let tmp_path = tmp_file.path().to_string_lossy().to_string();
+    let tmp_path = if stream {
+        // Streaming returns immediately and continues inference in a spawned task.
+        // Keep the temp file alive beyond this handler scope.
+        let (_f, kept_path) = match tmp_file.keep() {
+            Ok(v) => v,
+            Err(e) => {
+                return error_response(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to persist temp file for streaming: {}", e),
+                );
+            }
+        };
+        kept_path.to_string_lossy().to_string()
+    } else {
+        tmp_file.path().to_string_lossy().to_string()
+    };
 
     // Optional: backup audio
     let backup_path = if let Some(ref backup_dir) = state.backup_dir {
@@ -186,6 +214,67 @@ async fn transcribe_handler(
 
     // Run transcription
     let start = Instant::now();
+
+    if stream {
+        let (tx, rx) = tokio::sync::mpsc::channel::<String>(32);
+        let state_cloned = state.clone();
+        let tmp_path_cloned = tmp_path.clone();
+        let lang = language.clone();
+
+        actix_web::rt::spawn(async move {
+            let tx_for_infer = tx.clone();
+            let tmp_path_for_cleanup = tmp_path_cloned.clone();
+            let final_result = web::block(move || {
+                let model = state_cloned
+                    .model
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("model lock poisoned: {}", e))?;
+                model
+                    .0
+                    .transcribe_with_stream(&tmp_path_cloned, lang.as_deref(), Some(tx_for_infer))
+            })
+            .await;
+
+            match final_result {
+                Ok(Ok(r)) => {
+                    let _ = tx
+                        .send(format!("event: done\ndata: {}\n\n", serde_json::json!({ "text": r.text })))
+                        .await;
+                }
+                Ok(Err(e)) => {
+                    let _ = tx
+                        .send(format!(
+                            "event: error\ndata: {}\n\n",
+                            serde_json::json!({ "message": format!("Transcription failed: {}", e) })
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(format!(
+                            "event: error\ndata: {}\n\n",
+                            serde_json::json!({ "message": format!("Internal error: {}", e) })
+                        ))
+                        .await;
+                }
+            }
+            if let Err(e) = std::fs::remove_file(&tmp_path_for_cleanup) {
+                tracing::warn!("Failed to remove streaming temp file {}: {}", tmp_path_for_cleanup, e);
+            }
+            let _ = tx.send("data: [DONE]\n\n".to_string()).await;
+        });
+
+        let body_stream = futures_util::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|s| (Ok::<web::Bytes, actix_web::Error>(web::Bytes::from(s)), rx))
+        });
+        return HttpResponse::Ok()
+            .insert_header(("Content-Type", "text/event-stream"))
+            .insert_header(("Cache-Control", "no-cache"))
+            .insert_header(("Connection", "keep-alive"))
+            .streaming(body_stream);
+    }
 
     let result = {
         let state = state.clone();

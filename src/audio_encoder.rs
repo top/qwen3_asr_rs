@@ -1,6 +1,6 @@
+use crate::tensor::{DType, Device, Tensor};
 use anyhow::Result;
 use std::collections::HashMap;
-use crate::tensor::{DType, Device, Tensor};
 
 use crate::config::AudioEncoderConfig;
 use crate::layers::{AudioEncoderLayer, Conv2d, LayerNorm, Linear};
@@ -78,6 +78,7 @@ impl AudioEncoder {
     /// Encode mel spectrogram features into continuous audio embeddings.
     pub fn forward(&self, mel_features: &Tensor) -> Tensor {
         let num_frames = mel_features.size()[1] as usize;
+        tracing::debug!("AudioEncoder forward processing {} mel frames", num_frames);
 
         // Chunk size = n_window * 2
         let chunk_size = self.config.n_window * 2;
@@ -111,11 +112,7 @@ impl AudioEncoder {
                 DType::Float32,
                 device,
             );
-            let padded_mel = Tensor::cat(
-                &[tail_mel, pad],
-                1,
-            )
-            .unsqueeze(0);
+            let padded_mel = Tensor::cat(&[tail_mel, pad], 1).unsqueeze(0);
             chunk_mels.push(padded_mel);
             chunk_valid_tokens.push(Self::feat_extract_output_length(tail_frames));
         }
@@ -132,11 +129,15 @@ impl AudioEncoder {
 
         // Reshape: (b, channels, freq, time) -> (b, time, channels*freq)
         let (b, c, f, t) = x.size4();
-        let reshaped = x.permute(&[0, 3, 1, 2]).contiguous().reshape(&[b, t, c * f]);
+        let reshaped = x
+            .permute(&[0, 3, 1, 2])
+            .contiguous()
+            .reshape(&[b, t, c * f]);
         let conv_out = self.conv_out.forward(&reshaped);
 
         // Add positional embedding
-        let pos_emb = self.positional_embedding
+        let pos_emb = self
+            .positional_embedding
             .narrow(0, 0, t)
             .unsqueeze(0)
             .to_dtype(conv_out.kind());
@@ -196,7 +197,8 @@ impl AudioEncoder {
         let mut token_offset: i64 = 0;
         for w in 0..num_windows {
             let chunk_start = w * chunks_per_window;
-            let chunk_end = std::cmp::min(chunk_start + chunks_per_window, chunk_token_counts.len());
+            let chunk_end =
+                std::cmp::min(chunk_start + chunks_per_window, chunk_token_counts.len());
 
             let window_tokens: i64 = chunk_token_counts[chunk_start..chunk_end]
                 .iter()
@@ -213,37 +215,35 @@ impl AudioEncoder {
             token_offset += window_tokens;
         }
 
-        // Build the mask tensor
-        let neg_inf = Tensor::full(
-            &[1, 1, total_tokens, total_tokens],
-            f64::NEG_INFINITY,
-            DType::Float32,
-            device,
-        );
-        let zero = Tensor::zeros(
-            &[1, 1, total_tokens, total_tokens],
-            DType::Float32,
-            device,
-        );
-
-        // Create bool mask from data
-        // For tch backend: use from_slice + reshape
-        // For mlx backend: same approach
-        #[cfg(feature = "tch-backend")]
+        #[cfg(feature = "candle-backend")]
         {
-            let allow_mask = Tensor::from_tch(
-                tch::Tensor::from_slice(
-                    &allow_data.iter().map(|&b| if b { 1i64 } else { 0i64 }).collect::<Vec<_>>()
-                )
-                .reshape([1, 1, total_tokens, total_tokens])
-                .to_kind(tch::Kind::Bool)
-                .to_device(tch::Device::from(device)),
-            );
-            // where(allow, 0, -inf)
-            let mask = Tensor::from_tch(
-                zero.into_tch().where_self(&allow_mask.as_tch(), &neg_inf.into_tch())
-            );
-            Some(mask)
+            let c_device = crate::backend::candle::ffi::device_to_candle(device);
+            let allow_data_bool: Vec<bool> = allow_data.iter().map(|&b| b).collect();
+            let allow_tensor = candle_core::Tensor::from_vec(
+                allow_data_bool.iter().map(|&v| if v { 1u8 } else { 0u8 }).collect::<Vec<_>>(),
+                vec![1, 1, total_tokens as usize, total_tokens as usize],
+                &c_device,
+            )
+            .unwrap();
+
+            let zero_tensor = candle_core::Tensor::full(
+                0.0f32,
+                &[1, 1, total_tokens as usize, total_tokens as usize],
+                &c_device,
+            )
+            .unwrap();
+            let neg_inf_tensor = candle_core::Tensor::full(
+                f32::NEG_INFINITY,
+                &[1, 1, total_tokens as usize, total_tokens as usize],
+                &c_device,
+            )
+            .unwrap();
+
+            // where(mask, zero, neg_inf) - create causal mask logic
+            let result = allow_tensor.where_cond(&zero_tensor, &neg_inf_tensor).unwrap();
+            Some(Tensor::from_candle(
+                crate::backend::candle::array::CANDLE_ARRAY::new(result),
+            ))
         }
 
         #[cfg(feature = "mlx")]
