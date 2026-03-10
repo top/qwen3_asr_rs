@@ -35,9 +35,15 @@ tok.backend_tokenizer.save('./Qwen3-ASR-0.6B/tokenizer.json')
 ### 2. Install Dependencies
 ```bash
 sudo apt-get update -qq
-sudo apt-get install -y cmake pkg-config g++ nasm unzip \
-    libavutil-dev libavformat-dev libavcodec-dev libavdevice-dev \
-    libavfilter-dev libswscale-dev libswresample-dev curl tar
+sudo apt-get install -y cmake pkg-config g++ nasm unzip curl tar
+```
+
+If you need to decode non-WAV formats (MP3/FLAC/AAC/OGG/etc.), install system
+FFmpeg development packages too:
+
+```bash
+sudo apt-get install -y libavutil-dev libavformat-dev libavcodec-dev libavdevice-dev \
+   libavfilter-dev libswscale-dev libswresample-dev
 ```
 
 ### 3. Setup PyTorch (Jetpack 6.0 / ARM64)
@@ -55,18 +61,42 @@ export LD_LIBRARY_PATH="$LIBTORCH/lib:${LD_LIBRARY_PATH:-}"
 ### 4. Build from Source
 ```bash
 git submodule update --init --recursive
-cargo build --release --features build-ffmpeg
+
+# Option A — WAV-only (recommended if you only use WAV files):
+# No FFmpeg required; build normally.
+cargo build --release
+
+# Option B — Full format support (MP3/FLAC/AAC/OGG/etc):
+# Enable FFmpeg support (uses system FFmpeg libraries if available):
+cargo build --release --features ffmpeg
+
+# Advanced: build static FFmpeg (heavy, rarely needed):
+# cargo build --release --features build-ffmpeg
 ```
 
 ## Usage: OpenAI-Compatible API Server
 
-Start the lightweight Actix-Web HTTP server for handling audio transcriptions via API:
+Start the lightweight Actix-Web HTTP server for handling audio transcriptions via API.
+
+Audio format notes:
+- WAV files: supported natively (no FFmpeg required).
+- Other formats (MP3/FLAC/AAC/OGG/etc): require FFmpeg — either the system FFmpeg
+   dev packages or building with `--features build-ffmpeg`.
+
+Example (start server):
 
 ```bash
 ./target/release/asr serve ./Qwen3-ASR-0.6B -p 11435 --backup-dir ./backup/audio/ --db-path ./backup/asr.db
 ```
 
-This starts a `/v1/audio/transcriptions` endpoint capable of processing standard Whisper-style API requests. It records API metadata to SQLite (`backup/asr.db`) and saves incoming audio locally.
+Streaming: the `/v1/audio/transcriptions` endpoint accepts an optional multipart
+field `stream` (values `true`, `1`, `yes`). When set, the server responds with
+Server-Sent Events (SSE) and sends partial transcription updates as they are
+generated, then a final transcription.
+
+This starts a `/v1/audio/transcriptions` endpoint capable of processing standard
+Whisper-style API requests. It records API metadata to SQLite (`backup/asr.db`) and
+saves incoming audio locally.
 
 ## Systemd Service Deployment (Optional)
 

@@ -11,6 +11,7 @@ use crate::text_decoder::{create_causal_mask, KvCache, TextDecoder};
 use crate::tokenizer::{
     AsrTokenizer, AUDIO_PAD_TOKEN_ID, ENDOFTEXT_TOKEN_ID, IM_END_TOKEN_ID,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use crate::weights;
 
 const MEL_SAMPLE_RATE: u32 = 16000;
@@ -211,6 +212,128 @@ impl AsrInference {
                 language: language_detected,
                 raw_output: raw_text,
             })
+        })
+    }
+
+    /// Streaming transcription: sends partial decoded text as tokens are generated.
+    /// Caller should spawn this on a blocking thread; `sender` will receive partial strings.
+    pub fn transcribe_stream(
+        &self,
+        audio_path: &str,
+        language: Option<&str>,
+        sender: UnboundedSender<String>,
+    ) -> Result<()> {
+        crate::tensor::no_grad(|| {
+            // Step 1: Load and preprocess audio
+            tracing::info!("Loading audio from {}", audio_path);
+            let samples = audio::load_audio(audio_path, MEL_SAMPLE_RATE)?;
+
+            // Step 2: Compute mel spectrogram
+            let mel = self.mel_extractor.extract(&samples, self.device)?;
+            let num_mel_frames = mel.size()[1] as usize;
+            tracing::info!("Mel spectrogram: {} frames", num_mel_frames);
+
+            // Step 3: Run audio encoder
+            let audio_embeds = self.audio_encoder.forward(&mel);
+            let num_audio_tokens = audio_embeds.size()[0] as usize;
+            tracing::info!("Audio encoder: {} tokens", num_audio_tokens);
+
+            // Step 4: Build input token sequence
+            let (input_ids, audio_positions) = self.build_prompt(num_audio_tokens, language)?;
+            let seq_len = input_ids.len();
+
+            // Step 5: Build embeddings with audio injection
+            let input_tensor = Tensor::from_slice_i64(&input_ids).to_device(self.device);
+            let mut hidden_states = self.text_decoder.embed(&input_tensor).unsqueeze(0);
+
+            for (embed_idx, &seq_pos) in audio_positions.iter().enumerate() {
+                let audio_embed = audio_embeds.get(embed_idx as i64);
+                hidden_states = hidden_states.slice_scatter(
+                    &audio_embed.unsqueeze(0).unsqueeze(0),
+                    1,
+                    seq_pos as i64,
+                    seq_pos as i64 + 1,
+                    1,
+                );
+            }
+
+            // Step 6: Build MRoPE position IDs
+            let position_ids = self.build_position_ids(&input_ids);
+
+            let text_config = &self.config.thinker_config.text_config;
+            let (cos, sin) = compute_mrope_cos_sin(
+                &position_ids,
+                text_config.head_dim,
+                text_config.rope_theta,
+                &text_config.mrope_section(),
+                text_config.mrope_interleaved(),
+                self.device,
+            );
+
+            // Step 7: Prefill
+            let mask = create_causal_mask(seq_len as i64, 0, self.device);
+            let mut kv_cache = KvCache::new(text_config.num_hidden_layers);
+
+            let logits = self.text_decoder.forward(&hidden_states, &cos, &sin, &mut kv_cache, Some(&mask));
+
+            // Step 8: Autoregressive generation with streaming
+            let mut generated_ids: Vec<i64> = Vec::new();
+            let max_new_tokens = 4096;
+            let eos_token_ids = vec![ENDOFTEXT_TOKEN_ID, IM_END_TOKEN_ID];
+
+            let mut next_logits = logits.narrow(1, seq_len as i64 - 1, 1).squeeze_dim(1);
+            let mut current_pos = position_ids[0].len();
+
+            for _ in 0..max_new_tokens {
+                let next_token = next_logits.argmax(-1, false).int64_value(&[0]);
+
+                if eos_token_ids.contains(&next_token) {
+                    break;
+                }
+
+                generated_ids.push(next_token);
+
+                // Send partial decoded text every token (decoder may return subword fragments)
+                if let Ok(partial) = self.tokenizer.decode(&generated_ids) {
+                    // Ignore send errors (receiver closed)
+                    let _ = sender.send(partial);
+                }
+
+                let next_input = Tensor::from_slice_i64(&[next_token]).to_device(self.device);
+                let next_hidden = self.text_decoder.embed(&next_input).unsqueeze(0);
+
+                let new_pos_ids: [Vec<i64>; 3] = [
+                    vec![current_pos as i64],
+                    vec![current_pos as i64],
+                    vec![current_pos as i64],
+                ];
+
+                let (new_cos, new_sin) = compute_mrope_cos_sin(
+                    &new_pos_ids,
+                    text_config.head_dim,
+                    text_config.rope_theta,
+                    &text_config.mrope_section(),
+                    text_config.mrope_interleaved(),
+                    self.device,
+                );
+
+                let total_len = kv_cache.seq_len();
+                let mask = create_causal_mask(1, total_len, self.device);
+
+                next_logits = self.text_decoder.forward(&next_hidden, &new_cos, &new_sin, &mut kv_cache, Some(&mask));
+                next_logits = next_logits.squeeze_dim(1);
+
+                current_pos += 1;
+            }
+
+            // Final text
+            let raw_text = self.tokenizer.decode(&generated_ids)?;
+            let (_language_detected, transcription) = parse_asr_output(&raw_text, language.is_some());
+
+            // Send final full transcription
+            let _ = sender.send(transcription.clone());
+
+            Ok(())
         })
     }
 

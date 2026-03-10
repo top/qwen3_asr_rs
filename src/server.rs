@@ -2,6 +2,7 @@ use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
+use futures_util::stream;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -63,6 +64,7 @@ async fn transcribe_handler(
     let mut audio_bytes: Option<Vec<u8>> = None;
     let mut audio_filename: Option<String> = None;
     let mut language: Option<String> = state.default_language.clone();
+    let mut stream_mode: bool = false;
 
     // Parse multipart fields
     while let Some(item) = payload.next().await {
@@ -117,6 +119,20 @@ async fn transcribe_handler(
                     }
                 }
             }
+            "stream" => {
+                let mut buf = Vec::new();
+                while let Some(chunk) = field.next().await {
+                    if let Ok(data) = chunk {
+                        buf.extend_from_slice(&data);
+                    }
+                }
+                if let Ok(val) = String::from_utf8(buf) {
+                    let val = val.trim().to_ascii_lowercase();
+                    if val == "1" || val == "true" || val == "yes" {
+                        stream_mode = true;
+                    }
+                }
+            }
             _ => {
                 // Skip unknown fields
                 while field.next().await.is_some() {}
@@ -134,10 +150,20 @@ async fn transcribe_handler(
         }
     };
 
+    // Determine temp file suffix from original filename (if provided).
+    // This helps libraries like `hound` detect WAV files when the upload
+    // includes an original filename with a .wav extension.
+    let tmp_suffix = audio_filename
+        .as_deref()
+        .and_then(|f| Path::new(f).extension())
+        .and_then(|e| e.to_str())
+        .map(|s| format!(".{}", s))
+        .unwrap_or_else(|| ".audio".to_string());
+
     // Write audio to a temp file (FFmpeg needs a file path)
     let mut tmp_file = match tempfile::Builder::new()
         .prefix("asr_upload_")
-        .suffix(".audio")
+        .suffix(&tmp_suffix)
         .tempfile()
     {
         Ok(f) => f,
@@ -186,6 +212,46 @@ async fn transcribe_handler(
 
     // Run transcription
     let start = Instant::now();
+
+    // If streaming requested, spawn blocking generation and stream SSE events.
+    if stream_mode {
+        // create unbounded channel to receive partial strings
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Spawn blocking task to run generation and send partials.
+        // Move the NamedTempFile into the blocking task so the file is not
+        // deleted when the handler returns (NamedTempFile deletes on drop).
+        let state_clone = state.clone();
+        let tmp_file_for_task = tmp_file;
+        let lang_clone = language.clone();
+        tokio::task::spawn_blocking(move || {
+            match state_clone.model.lock() {
+                Ok(model) => {
+                    let path = tmp_file_for_task.path().to_string_lossy().to_string();
+                    let _ = model.0.transcribe_stream(&path, lang_clone.as_deref(), tx);
+                    // tmp_file_for_task is dropped here after processing, removing the file
+                }
+                Err(e) => {
+                    tracing::error!("model lock poisoned for streaming: {}", e);
+                }
+            }
+        });
+
+        // Convert tokio receiver into a stream of SSE `data:` frames
+        let stream = stream::unfold(rx, |mut rx: tokio::sync::mpsc::UnboundedReceiver<String>| async move {
+            match rx.recv().await {
+                Some(msg) => {
+                    let data = format!("data: {}\n\n", msg);
+                    Some((Ok::<_, actix_web::Error>(web::Bytes::from(data)), rx))
+                }
+                None => None,
+            }
+        });
+
+        return HttpResponse::Ok()
+            .content_type("text/event-stream")
+            .streaming(stream);
+    }
 
     let result = {
         let state = state.clone();

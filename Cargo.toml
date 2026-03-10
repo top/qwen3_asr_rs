@@ -21,8 +21,8 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 safetensors = "0.5"
-ffmpeg-next = "8"
-ffmpeg-sys-next = "8"
+ffmpeg-next = { version = "8", optional = true }
+ffmpeg-sys-next = { version = "8", optional = true }
 memmap2 = "0.9"
 clap = { version = "4", features = ["derive"] }
 actix-web = "=4.8.0"
@@ -42,5 +42,10 @@ cmake = "0.1"
 default = ["tch-backend"]
 tch-backend = ["dep:tch"]
 mlx = []
+
+# Optional FFmpeg support. Disabled by default — enables decoding of non-WAV formats.
+ffmpeg = ["dep:ffmpeg-next", "dep:ffmpeg-sys-next"]
+
+# Advanced: static or build-time FFmpeg options (rare; heavy).
 static-ffmpeg = ["ffmpeg-sys-next/static"]
 build-ffmpeg = ["ffmpeg-sys-next/build", "static-ffmpeg"]

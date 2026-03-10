@@ -2,19 +2,29 @@ use anyhow::{Context, Result};
 
 /// Load an audio file, converting to mono f32 at the target sample rate.
 ///
-/// Uses ffmpeg to decode any audio format (MP3, FLAC, AAC, WAV, OGG, etc.).
-/// Falls back to hound for WAV files if ffmpeg fails.
+/// Preferred path: use `hound` to read WAV files directly (fast, no external deps).
+/// If WAV loading fails (non-WAV or invalid WAV), fall back to FFmpeg to support
+/// arbitrary formats (MP3, FLAC, AAC, OGG, etc.).
 pub fn load_audio(path: &str, target_sample_rate: u32) -> Result<Vec<f32>> {
-    match load_audio_ffmpeg(path, target_sample_rate) {
+    match load_audio_wav(path, target_sample_rate) {
         Ok(samples) => Ok(samples),
         Err(e) => {
-            tracing::warn!("FFmpeg loading failed ({}), trying WAV fallback", e);
-            load_audio_wav(path, target_sample_rate)
+            tracing::info!("WAV loading failed ({}).", e);
+            #[cfg(feature = "ffmpeg")]
+            {
+                tracing::info!("Attempting FFmpeg fallback");
+                return load_audio_ffmpeg(path, target_sample_rate);
+            }
+            #[cfg(not(feature = "ffmpeg"))]
+            {
+                anyhow::bail!("WAV loading failed and crate built without FFmpeg support: {}", e);
+            }
         }
     }
 }
 
 /// Load audio using ffmpeg (any format).
+#[cfg(feature = "ffmpeg")]
 fn load_audio_ffmpeg(path: &str, target_sample_rate: u32) -> Result<Vec<f32>> {
     ffmpeg_next::init().context("Failed to initialize ffmpeg")?;
 
@@ -79,6 +89,7 @@ fn load_audio_ffmpeg(path: &str, target_sample_rate: u32) -> Result<Vec<f32>> {
 }
 
 /// Decode frames and resample. Creates the resampler lazily from the first decoded frame.
+#[cfg(feature = "ffmpeg")]
 fn decode_and_resample(
     decoder: &mut ffmpeg_next::decoder::Audio,
     resampler: &mut Option<ffmpeg_next::software::resampling::Context>,
@@ -131,6 +142,7 @@ fn decode_and_resample(
     Ok(())
 }
 
+#[cfg(feature = "ffmpeg")]
 fn flush_resampler(
     resampler: &mut ffmpeg_next::software::resampling::Context,
     samples: &mut Vec<f32>,
@@ -147,6 +159,8 @@ fn flush_resampler(
     }
 }
 
+#[cfg(feature = "ffmpeg")]
+#[cfg(feature = "ffmpeg")]
 fn append_f32_samples(frame: &ffmpeg_next::frame::Audio, samples: &mut Vec<f32>) {
     let n = frame.samples();
     if n == 0 {
@@ -156,6 +170,12 @@ fn append_f32_samples(frame: &ffmpeg_next::frame::Audio, samples: &mut Vec<f32>)
     let f32_slice =
         unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
     samples.extend_from_slice(f32_slice);
+}
+
+#[cfg(not(feature = "ffmpeg"))]
+#[cfg(not(feature = "ffmpeg"))]
+fn append_f32_samples(_frame: &(), _samples: &mut Vec<f32>) {
+    // Placeholder when ffmpeg feature is disabled; should never be called.
 }
 
 /// Load a WAV file and resample to target rate using rubato.
