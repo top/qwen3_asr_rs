@@ -1,123 +1,174 @@
-# Qwen3 ASR -- Rust CLI & API Server
+# qwen3-asr-server
 
-Pure Rust, highly optimized implementation of [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) automatic speech recognition. This project provides a cross-platform CLI tool and an OpenAI-compatible API server, specifically optimized for extremely low-memory edge devices like the NVIDIA Jetson Orin Nano.
-
-## 🚀 Key Optimizations for Edge Devices (e.g., NVIDIA Jetson)
-
-To run a 1B+ parameter Audio-Language Model on a 4GB/8GB unified memory chip without Out-of-Memory (OOM) errors:
-- **`no_grad()` Inference**: Fully disabled PyTorch backpropagation graph building to save gigabytes of VRAM.
-- **Zero-Copy Memory Mapping (`memmap2`)**: Safetensors weights are memory-mapped directly from the disk to the GPU, eliminating the massive CPU RAM spike (2GB+) during model loading.
-- **Native BFloat16/FP16 Loading**: Weights bypass FP32 decompression, preventing VRAM doubling and locking the model footprint to its true minimal size (~1.2GB).
-- **Dynamic Type Casting**: Audio features and attention masks automatically match the natively loaded `BFloat16` weights to prevent PyTorch type mismatches.
-
-## Quick Start on NVIDIA Jetson / Linux
-
-This fork bypasses fragile `pip` installations by directly downloading and linking the pre-compiled NVIDIA PyTorch wheel.
-
-### 1. Download Model and Tokenizer
-You need to pull the HuggingFace weights and generate the `tokenizer.json` file which the Rust `tokenizers` crate requires:
-
-```bash
-# In a Python environment (like venv) with transformers installed:
-pip install huggingface_hub transformers
-
-# Download the model
-huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir Qwen3-ASR-0.6B
-
-# Extract the Rust-compatible tokenizer.json
-python3 -c "
-from transformers import AutoTokenizer
-tok = AutoTokenizer.from_pretrained('./Qwen3-ASR-0.6B', trust_remote_code=True)
-tok.backend_tokenizer.save('./Qwen3-ASR-0.6B/tokenizer.json')
-"
-```
-
-### 2. Install Dependencies
-```bash
-sudo apt-get update -qq
-sudo apt-get install -y cmake pkg-config g++ nasm unzip \
-    libavutil-dev libavformat-dev libavcodec-dev libavdevice-dev \
-    libavfilter-dev libswscale-dev libswresample-dev curl tar
-```
-
-### 3. Setup PyTorch (Jetpack 6.0 / ARM64)
-```bash
-# Download and extract the PyTorch wheel for Jetson
-curl -L -o torch-2.3.0.whl https://nvidia.box.com/shared/static/zvultzsmd4iuheykxy17s4l2n91ylpl8.whl
-unzip -qo torch-2.3.0.whl -d .torch
-
-# Export environment variables for the compiler and runtime
-export LIBTORCH="$(pwd)/.torch/torch"
-export LIBTORCH_BYPASS_VERSION_CHECK=1
-export LD_LIBRARY_PATH="$LIBTORCH/lib:${LD_LIBRARY_PATH:-}"
-```
-
-### 4. Build from Source
-```bash
-git submodule update --init --recursive
-cargo build --release --features build-ffmpeg
-```
-
-## Usage: OpenAI-Compatible API Server
-
-Start the lightweight Actix-Web HTTP server for handling audio transcriptions via API:
-
-```bash
-./target/release/asr serve ./Qwen3-ASR-0.6B -p 11435 --backup-dir ./backup/audio/ --db-path ./backup/asr.db
-```
-
-This starts a `/v1/audio/transcriptions` endpoint capable of processing standard Whisper-style API requests. It records API metadata to SQLite (`backup/asr.db`) and saves incoming audio locally.
-
-## Systemd Service Deployment (Optional)
-
-To run the API server continuously in the background and start it on boot, you can configure it as a systemd user service.
-
-1. **Install and start the service**:
-   ```bash
-   mkdir -p ~/.config/systemd/user/
-   cp qwen3-asr-server.service ~/.config/systemd/user/
-   systemctl --user daemon-reload
-   systemctl --user enable --now qwen3-asr-server
-   ```
-
-2. **Check status and logs**:
-   ```bash
-   systemctl --user status qwen3-asr-server
-   journalctl --user -u qwen3-asr-server -n 80 -f
-   ```
-
-## Usage: CLI Tool
-
-```bash
-# Basic transcription (auto-detect language)
-./target/release/asr transcribe ./Qwen3-ASR-0.6B input.wav
-
-# Force language
-./target/release/asr transcribe ./Qwen3-ASR-0.6B input.wav chinese
-
-# Enable debug logging
-RUST_LOG=debug ./target/release/asr transcribe ./Qwen3-ASR-0.6B input.wav
-```
-
-## Supported Models
-
-| Model | Parameters | HuggingFace |
-|-------|-----------|-------------|
-| Qwen3-ASR-0.6B | 0.6B | [Qwen/Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) |
-| Qwen3-ASR-1.7B | 1.7B | [Qwen/Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) |
-
-## Supported Languages
-
-Qwen3-ASR supports 30 languages: Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, Romanian, Hungarian, Macedonian.
+OpenAI-compatible Audio Transcriptions API server based on qwen3-asr-rs, optimized for Jetson Orin Nano with CUDA acceleration.
 
 ## Architecture
 
-The implementation completely maps the Qwen3-ASR architecture using Rust libtorch bindings:
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      API Layer (Axum)                       │
+├─────────────────────────────────────────────────────────────┤
+│  POST /v1/audio/transcriptions                              │
+│  ├── Normal Mode: JSON response                             │
+│  └── Streaming Mode: SSE (Server-Sent Events)               │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Request Processing                         │
+├─────────────────────────────────────────────────────────────┤
+│  - Multipart form data parsing                              │
+│  - WAV format validation                                    │
+│  - Parameter extraction (OpenAI compatible)                 │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Audio Processing Module                     │
+├─────────────────────────────────────────────────────────────┤
+│  AudioProcessor:                                            │
+│  - Extract raw PCM data                                     │
+│  - Get sample rate, channels                                │
+│  - Validate WAV format                                      │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Concurrency Control Layer                     │
+├─────────────────────────────────────────────────────────────┤
+│  Semaphore-based rate limiter                               │
+│  - Limit concurrent inference tasks                         │
+│  - Queue incoming requests                                  │
+│  - Configurable via environment variable                    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 Inference Engine (CUDA)                      │
+├─────────────────────────────────────────────────────────────┤
+│  InferenceEngine:                                           │
+│  - Load qwen3-asr 0.6B model                                │
+│  - Use candle framework with CUDA backend                   │
+│  - Execute transcription (batch/streaming)                  │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- **Audio Encoder** (Whisper-style): 3x Conv2d downsampling → sinusoidal positional embeddings → 18 transformer encoder layers
-- **Text Decoder** (Qwen3): 28 transformer decoder layers with Grouped Query Attention, QK-normalization, MRoPE, and SwiGLU MLP
-- **Audio preprocessing**: FFmpeg decodes any format → resamples to mono 16kHz f32 → 128-bin log-mel spectrogram
+## Project Structure
+
+```
+qwen3-asr-server/
+├── src/
+│   ├── api/              # API handlers and types
+│   ├── audio/            # Audio processing
+│   ├── inference/        # Inference engine
+│   ├── concurrency/      # Rate limiting
+│   ├── config.rs         # Configuration
+│   └── main.rs           # Server entry point
+├── tests/                # Integration tests
+├── Dockerfile            # Jetson deployment
+├── Cargo.toml
+└── .env.example
+```
+
+## Features
+
+- **OpenAI-compatible API**: Drop-in replacement for OpenAI Audio Transcriptions
+- **WAV support**: Optimized for WAV format processing
+- **SSE streaming**: Real-time transcription with Server-Sent Events
+- **CUDA acceleration**: Leverages NVIDIA GPU for fast inference
+- **Concurrency control**: Prevents GPU OOM on resource-constrained devices
+- **Docker support**: Easy deployment on Jetson Orin Nano
+
+## Configuration
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 8080 | Server port |
+| `CONCURRENCY_LIMIT` | 2 | Max concurrent requests |
+| `MODEL_PATH` | models | Path to model directory |
+| `CUDA_DEVICE` | true | Use CUDA device |
+
+## API Endpoints
+
+### POST /v1/audio/transcriptions
+
+**Request (multipart/form-data):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | Yes | WAV audio file |
+| `model` | string | No | Model name (default: qwen3-asr-0.6B) |
+| `language` | string | No | Language code (e.g., "en", "zh") |
+| `prompt` | string | No | Contextual prompt |
+| `response_format` | string | No | "json" or "text" |
+| `temperature` | number | No | Sampling temperature |
+| `stream` | boolean | No | Enable SSE streaming |
+
+**Response (JSON):**
+
+```json
+{
+  "text": "Transcribed text",
+  "language": "en",
+  "duration": 10.5
+}
+```
+
+**Response (SSE):**
+
+```
+data: {"text": "partial text", "language": "en", "duration": 10.5}
+```
+
+## Usage
+
+### Local Development
+
+```bash
+# Install dependencies
+cargo build
+
+# Run server
+cargo run
+
+# Test with curl
+curl -X POST http://localhost:8080/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "language=en"
+```
+
+### Docker (Jetson Orin Nano)
+
+```bash
+# Build image
+docker build -t qwen3-asr-server .
+
+# Run container
+docker run -d \
+  -p 8080:8080 \
+  -v /path/to/models:/app/models \
+  --gpus all \
+  qwen3-asr-server
+```
+
+## Known Issues
+
+1. **CUDA compilation error**: The `candle-kernels` crate has compatibility issues with CUDA 12.4 on some systems. This is a known issue with the upstream library and does not affect Jetson Orin Nano deployment.
+
+2. **Model download**: Models must be downloaded manually to the `MODEL_PATH` directory before running.
+
+## Development Status
+
+- [x] US-001: Project Foundation & Basic Axum Server
+- [ ] US-002: Audio Processing Module (WAV Only)
+- [ ] US-003: Candle-based Inference Engine (CUDA)
+- [ ] US-004: OpenAI Parameter Support & JSON Response
+- [ ] US-005: SSE Single-Direction Streaming
+- [ ] US-006: VRAM-Safe Concurrency (Semaphore)
+- [x] US-007: Containerization for Jetson
 
 ## License
 
-Apache-2.0
+MIT

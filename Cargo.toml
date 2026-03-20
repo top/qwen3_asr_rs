@@ -1,45 +1,47 @@
 [package]
-name = "qwen3_asr"
-version = "0.1.8"
+name = "qwen3-asr-server"
+version = "0.1.0"
 edition = "2021"
-description = "Pure Rust implementation of Qwen3 ASR (Automatic Speech Recognition) using Candle with CUDA support for Jetson Orin Nano"
-license = "Apache-2.0"
-
-[[bin]]
-name = "asr"
-path = "src/main.rs"
 
 [dependencies]
-candle-core = { version = "0.9", optional = true }
-candle-nn = { version = "0.9", optional = true }
-tokenizers = "0.21"
+# Web framework
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.4", features = ["limit"] }
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-hound = "3.5"
-rubato = "0.16"
-thiserror = "2.0"
+
+# Error handling
 anyhow = "1.0"
+thiserror = "2.0"
+
+# Async streams
+futures = "0.3"
+
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-safetensors = "0.5"
-memmap2 = "0.9"
-clap = { version = "4", features = ["derive"] }
-actix-web = "=4.8.0"
-actix-multipart = "=0.6.1"
-time = "=0.3.36"
-rusqlite = { version = "0.32", features = ["bundled"] }
-uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
-tokio = { version = "1", features = ["full"] }
-futures-util = "0.3"
+
+# Audio processing
+hound = "3.5"
+rubato = "0.15"
 tempfile = "3"
-rustfft = "6"
 
-[build-dependencies]
-cmake = "0.1"
+# qwen3-asr with CUDA support for Jetson Orin
+qwen3-asr = { version = "0.2", default-features = false, features = ["cuda"] }
 
-[features]
-default = ["candle-backend"]
-candle-backend = ["dep:candle-core", "dep:candle-nn"]
-cuda = ["candle-backend", "candle-core/cuda", "candle-nn/cuda"]
-mlx = []
+cudarc = { version = "0.19.3", features = ["cuda-12060"] }
+
+[dev-dependencies]
+httpc-test = "0.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[patch.crates-io]
+"candle-kernels" = { path = "../candle/candle-kernels" }
