@@ -5,7 +5,7 @@
 # Set environment variables
 export PORT=${PORT:-11433}
 export CONCURRENCY_LIMIT=${CONCURRENCY_LIMIT:-2}
-export MODEL_PATH=${MODEL_PATH:-../qwen3-asr-rs/Qwen3-ASR-0.6B/}
+export MODEL_PATH=${MODEL_PATH:-../Qwen3-ASR-0.6B/}
 export CUDA_DEVICE=${CUDA_DEVICE:-true}
 export JETSON_TARGET=true
 export CUDA_HOME=/usr/local/cuda-12.6
