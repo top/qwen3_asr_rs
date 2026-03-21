@@ -3,11 +3,8 @@ use axum::response::sse::{Event, Sse};
 use futures::stream::{self, Stream, StreamExt};
 use std::pin::Pin;
 use std::convert::Infallible;
-use std::time::Duration;
-
 use crate::concurrency::ConcurrencyLimiter;
 use crate::inference::InferenceEngine;
-use tokio::time::sleep;
 
 pub struct SseResponse {
     pub engine: std::sync::Arc<InferenceEngine>,
@@ -27,17 +24,15 @@ impl IntoResponse for SseResponse {
 enum StreamState {
     Init,
     Feeding {
-        offset: usize,
-        state: qwen3_asr::StreamingState,
+        state: Option<qwen3_asr::StreamingState>,
         last_text: String,
         _permit: tokio::sync::OwnedSemaphorePermit,
     },
     Finishing {
-        state: qwen3_asr::StreamingState,
+        state: Option<qwen3_asr::StreamingState>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     },
     Done,
-    Finished,
 }
 
 impl SseResponse {
@@ -47,25 +42,25 @@ impl SseResponse {
         let engine = self.engine.clone();
         let limiter = self.limiter.clone();
         let audio_data = self.audio_data;
-        let chunk_size = 8000; // 0.5s chunks for responsiveness
+        // Increased chunk size to 0.8s to reduce quadratic prefill overhead in long audio
+        let chunk_size = 12800; 
 
         let stream = stream::unfold(
             (engine, limiter, audio_data, StreamState::Init),
-            move |(engine, limiter, audio_data, state)| async move {
+            move |(engine, limiter, mut audio_data, state)| async move {
                 match state {
                     StreamState::Init => {
                         match limiter.acquire_owned().await {
                             Ok(permit) => {
                                 let opts = qwen3_asr::StreamingOptions::default()
-                                    .with_chunk_size_sec(0.5);
+                                    .with_chunk_size_sec(0.8);
                                 let asr_state = engine.init_streaming(opts);
                                 let next_state = StreamState::Feeding {
-                                    offset: 0,
-                                    state: asr_state,
+                                    state: Some(asr_state),
                                     last_text: String::new(),
                                     _permit: permit,
                                 };
-                                tracing::info!("SSE: Initialized streaming session");
+                                tracing::info!("SSE: Initialized streaming session (optimized chunk size)");
                                 return Some((None, (engine, limiter, audio_data, next_state)));
                             }
                             Err(_) => {
@@ -74,18 +69,19 @@ impl SseResponse {
                             }
                         }
                     }
-                    StreamState::Feeding { offset, mut state, last_text, _permit } => {
-                        if offset >= audio_data.len() {
+                    StreamState::Feeding { mut state, last_text, _permit } => {
+                        if audio_data.is_empty() {
                             return Some((None, (engine, limiter, audio_data, StreamState::Finishing { state, _permit })));
                         }
 
-                        let end = (offset + chunk_size).min(audio_data.len());
-                        let chunk = &audio_data[offset..end];
+                        // Drain chunk from audio_data to free RAM immediately
+                        let take_len = chunk_size.min(audio_data.len());
+                        let chunk: Vec<f32> = audio_data.drain(..take_len).collect();
                         
-                        // Small sleep to ensure flushes and simulate streaming
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-                        match engine.feed_audio(&mut state, chunk) {
+                        let mut asr_state = state.take().expect("State missing in Feeding");
+                        match engine.feed_audio(&mut asr_state, &chunk) {
                             Ok(Some(result)) => {
                                 if result.text != last_text && !result.text.is_empty() {
                                     tracing::info!("SSE: Sending partial result: {}", result.text);
@@ -94,20 +90,16 @@ impl SseResponse {
                                         "is_final": false
                                     });
                                     let evt = Some(Event::default().json_data(chunk_json).unwrap_or(Event::default().data("error")));
-                                    // Yield to allow flush
                                     tokio::task::yield_now().await;
                                     return Some((evt, (engine, limiter, audio_data, StreamState::Feeding { 
-                                        offset: end, 
-                                        state, 
+                                        state: Some(asr_state), 
                                         last_text: result.text,
                                         _permit: _permit,
                                     })));
                                 } else {
-                                    // Yield occasionally even if no text to avoid blocking too long
                                     tokio::task::yield_now().await;
                                     return Some((None, (engine, limiter, audio_data, StreamState::Feeding { 
-                                        offset: end, 
-                                        state, 
+                                        state: Some(asr_state), 
                                         last_text,
                                         _permit: _permit,
                                     })));
@@ -116,8 +108,7 @@ impl SseResponse {
                             Ok(None) => {
                                 tokio::task::yield_now().await;
                                 return Some((None, (engine, limiter, audio_data, StreamState::Feeding { 
-                                    offset: end, 
-                                    state, 
+                                    state: Some(asr_state), 
                                     last_text,
                                     _permit: _permit,
                                 })));
@@ -130,7 +121,8 @@ impl SseResponse {
                         }
                     }
                     StreamState::Finishing { mut state, _permit } => {
-                        match engine.finish_streaming(&mut state) {
+                        let mut asr_state = state.take().expect("State missing in Finishing");
+                        match engine.finish_streaming(&mut asr_state) {
                             Ok(result) => {
                                 tracing::info!("SSE: Sending final result: {}", result.text);
                                 let final_json = serde_json::json!({
@@ -138,6 +130,7 @@ impl SseResponse {
                                     "is_final": true
                                 });
                                 let evt = Some(Event::default().json_data(final_json).unwrap_or(Event::default().data("error")));
+                                // StreamingState is dropped here as asr_state goes out of scope and state is None
                                 return Some((evt, (engine, limiter, audio_data, StreamState::Done)));
                             }
                             Err(e) => {
@@ -148,9 +141,6 @@ impl SseResponse {
                         }
                     }
                     StreamState::Done => {
-                        return None;
-                    }
-                    StreamState::Finished => {
                         return None;
                     }
                 }

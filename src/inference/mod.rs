@@ -7,7 +7,6 @@ use crate::config::Config;
 
 pub struct TranscriptionResult {
     pub text: String,
-    pub language: String,
 }
 
 pub struct InferenceEngine {
@@ -61,7 +60,6 @@ impl InferenceEngine {
 
         Ok(TranscriptionResult {
             text: result.text,
-            language: result.language,
         })
     }
 
@@ -79,7 +77,6 @@ impl InferenceEngine {
         
         Ok(result.map(|r| TranscriptionResult {
             text: r.text,
-            language: r.language,
         }))
     }
 
@@ -92,7 +89,6 @@ impl InferenceEngine {
         
         Ok(TranscriptionResult {
             text: result.text,
-            language: result.language,
         })
     }
 }

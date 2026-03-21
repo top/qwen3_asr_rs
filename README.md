@@ -1,6 +1,9 @@
 # qwen3-asr-server
 
-OpenAI-compatible Audio Transcriptions API server based on qwen3-asr-rs, optimized for Jetson Orin Nano with CUDA acceleration.
+> [!TIP]
+> **Switch to libtorch version**: [Click here to view the `main` branch](https://github.com/top/qwen3_asr_rs/tree/main). The `main` branch is a `libtorch`-based implementation, which has higher memory usage and slower inference speed.
+
+OpenAI-compatible Audio Transcriptions API server based on `qwen3-asr-rs`. This version is powered by the **[Candle](https://github.com/huggingface/candle)** ML framework, providing a **lighter**, **faster**, and more **resource-efficient** inference experience. Optimized specifically for Jetson Orin Nano with CUDA acceleration.
 
 ## Architecture
 
