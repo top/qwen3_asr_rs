@@ -1,5 +1,8 @@
 # Qwen3 ASR -- Rust CLI & API Server
 
+> [!TIP]
+> **Switch to Candle version**: [Click here to view the `candle` branch](https://github.com/top/qwen3_asr_rs/tree/candle). The `candle` branch is a **[Candle](https://github.com/huggingface/candle)**-powered implementation, which is **lighter**, **faster**, and more **resource-efficient**.
+
 Pure Rust, highly optimized implementation of [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) automatic speech recognition. This project provides a cross-platform CLI tool and an OpenAI-compatible API server, specifically optimized for extremely low-memory edge devices like the NVIDIA Jetson Orin Nano.
 
 ## 🚀 Key Optimizations for Edge Devices (e.g., NVIDIA Jetson)
