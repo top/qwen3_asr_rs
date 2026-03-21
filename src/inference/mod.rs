@@ -50,16 +50,29 @@ impl InferenceEngine {
             audio_data.len() as f64 / 16000.0
         );
 
-        let options = TranscribeOptions::default();
-        let result = self
-            .engine
-            .transcribe_samples(audio_data, options)
-            .map_err(|e| anyhow::anyhow!("Transcription failed: {}", e))?;
+        let sample_rate = 16000;
+        let segments = crate::audio::segment_audio(audio_data, sample_rate, 20.0);
+        info!("Audio segmented into {} chunks for VRAM optimization", segments.len());
 
-        info!("Transcription completed: {} chars", result.text.len());
+        let mut final_text = String::new();
+
+        for (i, segment) in segments.iter().enumerate() {
+            info!("Processing segment {}/{}", i + 1, segments.len());
+            let result = self
+                .engine
+                .transcribe_samples(segment, TranscribeOptions::default())
+                .map_err(|e| anyhow::anyhow!("Transcription failed on segment {}: {}", i + 1, e))?;
+
+            if !final_text.is_empty() && !result.text.is_empty() {
+                final_text.push(' ');
+            }
+            final_text.push_str(&result.text);
+        }
+
+        info!("Transcription completed: {} chars", final_text.len());
 
         Ok(TranscriptionResult {
-            text: result.text,
+            text: final_text,
         })
     }
 

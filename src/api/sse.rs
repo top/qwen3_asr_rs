@@ -23,14 +23,21 @@ impl IntoResponse for SseResponse {
 
 enum StreamState {
     Init,
-    Feeding {
+    FeedingSegment {
         state: Option<qwen3_asr::StreamingState>,
+        current_segment_idx: usize,
+        segment_data: Vec<f32>,
         last_text: String,
-        _permit: tokio::sync::OwnedSemaphorePermit,
+        accumulated_text: String,
+        segments: Vec<Vec<f32>>,
+        _permit: std::sync::Arc<tokio::sync::OwnedSemaphorePermit>, // Using Arc so we can clone it into new states
     },
-    Finishing {
+    FinishingSegment {
         state: Option<qwen3_asr::StreamingState>,
-        _permit: tokio::sync::OwnedSemaphorePermit,
+        current_segment_idx: usize,
+        accumulated_text: String,
+        segments: Vec<Vec<f32>>,
+        _permit: std::sync::Arc<tokio::sync::OwnedSemaphorePermit>,
     },
     Done,
 }
@@ -42,41 +49,59 @@ impl SseResponse {
         let engine = self.engine.clone();
         let limiter = self.limiter.clone();
         let audio_data = self.audio_data;
-        // Increased chunk size to 0.8s to reduce quadratic prefill overhead in long audio
-        let chunk_size = 12800; 
+        let chunk_size = 19200; // 1.2s bite chunks for processing smoothly
+        let sample_rate = 16000;
+        let max_duration_sec = 20.0;
 
+        
+        // Pre-segment to avoid VRAM overload across entire file
+        let mut segments = crate::audio::segment_audio(&audio_data, sample_rate, max_duration_sec);
+        if segments.is_empty() {
+            segments.push(Vec::new()); // Fallback empty
+        }
+        
         let stream = stream::unfold(
-            (engine, limiter, audio_data, StreamState::Init),
-            move |(engine, limiter, mut audio_data, state)| async move {
-                match state {
+            (engine, limiter, segments, StreamState::Init),
+            move |(engine, limiter, segments, state): (std::sync::Arc<InferenceEngine>, std::sync::Arc<crate::concurrency::ConcurrencyLimiter>, Vec<Vec<f32>>, StreamState)| async move {
+                let next: Option<(Option<Event>, _)> = match state {
                     StreamState::Init => {
                         match limiter.acquire_owned().await {
                             Ok(permit) => {
                                 let opts = qwen3_asr::StreamingOptions::default()
-                                    .with_chunk_size_sec(0.8);
+                                    .with_chunk_size_sec(1.2);
                                 let asr_state = engine.init_streaming(opts);
-                                let next_state = StreamState::Feeding {
+
+                                let next_state = StreamState::FeedingSegment {
                                     state: Some(asr_state),
+                                    current_segment_idx: 0,
+                                    segment_data: segments[0].clone(),
                                     last_text: String::new(),
-                                    _permit: permit,
+                                    accumulated_text: String::new(),
+                                    segments: segments.clone(),
+                                    _permit: std::sync::Arc::new(permit),
                                 };
-                                tracing::info!("SSE: Initialized streaming session (optimized chunk size)");
-                                return Some((None, (engine, limiter, audio_data, next_state)));
+                                tracing::info!("SSE: Initialized streaming session ({} segments)", segments.len());
+                                Some((None, (engine, limiter, segments, next_state)))
                             }
                             Err(_) => {
-                                let evt = Some(Event::default().json_data(serde_json::json!({"error": "Concurrency limit reached"})).unwrap_or(Event::default().data("error")));
-                                return Some((evt, (engine, limiter, audio_data, StreamState::Done)));
+                                let evt: Option<Event> = Some(Event::default().json_data(serde_json::json!({"error": "Concurrency limit reached"})).unwrap_or_else(|_| Event::default().data("error")));
+                                Some((evt, (engine, limiter, segments, StreamState::Done)))
                             }
                         }
                     }
-                    StreamState::Feeding { mut state, last_text, _permit } => {
-                        if audio_data.is_empty() {
-                            return Some((None, (engine, limiter, audio_data, StreamState::Finishing { state, _permit })));
-                        }
-
-                        // Drain chunk from audio_data to free RAM immediately
-                        let take_len = chunk_size.min(audio_data.len());
-                        let chunk: Vec<f32> = audio_data.drain(..take_len).collect();
+                    StreamState::FeedingSegment { mut state, current_segment_idx, mut segment_data, last_text, accumulated_text, segments: state_segments, _permit } => {
+                        if segment_data.is_empty() {
+                            Some((None, (engine, limiter, state_segments.clone(), StreamState::FinishingSegment { 
+                                state, 
+                                current_segment_idx, 
+                                accumulated_text,
+                                segments: state_segments,
+                                _permit 
+                            })))
+                        } else {
+                            // Drain small chunk from segment chunk to feed progressively
+                        let take_len = chunk_size.min(segment_data.len());
+                        let chunk: Vec<f32> = segment_data.drain(..take_len).collect();
                         
                         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
@@ -84,69 +109,117 @@ impl SseResponse {
                         match engine.feed_audio(&mut asr_state, &chunk) {
                             Ok(Some(result)) => {
                                 if result.text != last_text && !result.text.is_empty() {
-                                    tracing::info!("SSE: Sending partial result: {}", result.text);
+                                    tracing::debug!("SSE: Segment partial result: {}", result.text);
+                                    
+                                    let combined = if accumulated_text.is_empty() {
+                                        result.text.clone()
+                                    } else {
+                                        format!("{} {}", accumulated_text, result.text)
+                                    };
+                                    
                                     let chunk_json = serde_json::json!({
-                                        "text": result.text,
+                                        "text": combined,
                                         "is_final": false
                                     });
-                                    let evt = Some(Event::default().json_data(chunk_json).unwrap_or(Event::default().data("error")));
+                                    let evt: Option<Event> = Some(Event::default().json_data(chunk_json).unwrap_or_else(|_| Event::default().data("error")));
                                     tokio::task::yield_now().await;
-                                    return Some((evt, (engine, limiter, audio_data, StreamState::Feeding { 
+                                    Some((evt, (engine, limiter, state_segments.clone(), StreamState::FeedingSegment { 
                                         state: Some(asr_state), 
+                                        current_segment_idx,
+                                        segment_data,
                                         last_text: result.text,
+                                        accumulated_text,
+                                        segments: state_segments,
                                         _permit: _permit,
-                                    })));
+                                    })))
                                 } else {
                                     tokio::task::yield_now().await;
-                                    return Some((None, (engine, limiter, audio_data, StreamState::Feeding { 
+                                    Some((None, (engine, limiter, state_segments.clone(), StreamState::FeedingSegment { 
                                         state: Some(asr_state), 
+                                        current_segment_idx,
+                                        segment_data,
                                         last_text,
+                                        accumulated_text,
+                                        segments: state_segments,
                                         _permit: _permit,
-                                    })));
+                                    })))
                                 }
                             }
                             Ok(None) => {
                                 tokio::task::yield_now().await;
-                                return Some((None, (engine, limiter, audio_data, StreamState::Feeding { 
+                                Some((None, (engine, limiter, state_segments.clone(), StreamState::FeedingSegment { 
                                     state: Some(asr_state), 
+                                    current_segment_idx,
+                                    segment_data,
                                     last_text,
+                                    accumulated_text,
+                                    segments: state_segments,
                                     _permit: _permit,
-                                })));
+                                })))
                             }
                             Err(e) => {
                                 tracing::error!("SSE: Feeding error: {}", e);
-                                let evt = Some(Event::default().json_data(serde_json::json!({"error": e.to_string()})).unwrap_or(Event::default().data("error")));
-                                return Some((evt, (engine, limiter, audio_data, StreamState::Done)));
+                                let evt: Option<Event> = Some(Event::default().json_data(serde_json::json!({"error": e.to_string()})).unwrap_or_else(|_| Event::default().data("error")));
+                                Some((evt, (engine, limiter, state_segments, StreamState::Done)))
                             }
                         }
+                        } // end else
                     }
-                    StreamState::Finishing { mut state, _permit } => {
+                    StreamState::FinishingSegment { mut state, current_segment_idx, mut accumulated_text, segments: state_segments, _permit } => {
                         let mut asr_state = state.take().expect("State missing in Finishing");
                         match engine.finish_streaming(&mut asr_state) {
                             Ok(result) => {
-                                tracing::info!("SSE: Sending final result: {}", result.text);
+                                tracing::info!("SSE: Finalized segment {} text: {}", current_segment_idx + 1, result.text);
+                                
+                                if !accumulated_text.is_empty() && !result.text.is_empty() {
+                                    accumulated_text.push(' ');
+                                }
+                                accumulated_text.push_str(&result.text);
+
+                                let is_very_final = current_segment_idx >= state_segments.len() - 1;
+                                
                                 let final_json = serde_json::json!({
-                                    "text": result.text,
-                                    "is_final": true
+                                    "text": accumulated_text,
+                                    "is_final": is_very_final
                                 });
-                                let evt = Some(Event::default().json_data(final_json).unwrap_or(Event::default().data("error")));
-                                // StreamingState is dropped here as asr_state goes out of scope and state is None
-                                return Some((evt, (engine, limiter, audio_data, StreamState::Done)));
+                                let evt: Option<Event> = Some(Event::default().json_data(final_json).unwrap_or_else(|_| Event::default().data("error")));
+                                
+                                if is_very_final {
+                                    Some((evt, (engine, limiter, state_segments, StreamState::Done)))
+                                } else {
+                                    // Move to next segment
+                                    let next_idx = current_segment_idx + 1;
+                                    let opts = qwen3_asr::StreamingOptions::default().with_chunk_size_sec(1.2);
+                                    let new_asr_state = engine.init_streaming(opts);
+
+                                    
+                                    let next_state = StreamState::FeedingSegment {
+                                        state: Some(new_asr_state),
+                                        current_segment_idx: next_idx,
+                                        segment_data: state_segments[next_idx].clone(),
+                                        last_text: String::new(),
+                                        accumulated_text,
+                                        segments: state_segments.clone(),
+                                        _permit,
+                                    };
+                                    Some((evt, (engine, limiter, state_segments, next_state)))
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("SSE: Finishing error: {}", e);
-                                let evt = Some(Event::default().json_data(serde_json::json!({"error": e.to_string()})).unwrap_or(Event::default().data("error")));
-                                return Some((evt, (engine, limiter, audio_data, StreamState::Done)));
+                                let evt: Option<Event> = Some(Event::default().json_data(serde_json::json!({"error": e.to_string()})).unwrap_or_else(|_| Event::default().data("error")));
+                                Some((evt, (engine, limiter, state_segments, StreamState::Done)))
                             }
                         }
                     }
                     StreamState::Done => {
-                        return None;
+                        None
                     }
-                }
+                };
+                next
             },
-        ).filter_map(|evt| async move {
-            evt.map(Ok)
+        ).filter_map(|evt: Option<Event>| async move {
+            evt.map(|e| Ok::<Event, Infallible>(e))
         });
 
         Box::pin(stream)
