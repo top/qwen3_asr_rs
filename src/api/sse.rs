@@ -148,8 +148,7 @@ impl SseResponse {
                         }
                     }
                     StreamState::Done => {
-                        let evt = Some(Event::default().data("[DONE]"));
-                        return Some((evt, (engine, limiter, audio_data, StreamState::Finished)));
+                        return None;
                     }
                     StreamState::Finished => {
                         return None;
