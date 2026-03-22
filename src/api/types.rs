@@ -6,6 +6,7 @@ pub struct TranscriptionRequest {
     pub file_name: String,
     pub file_data: Vec<u8>,
     pub stream: Option<bool>,
+    pub model: String,
 }
 
 impl TranscriptionRequest {
@@ -13,6 +14,7 @@ impl TranscriptionRequest {
         let mut file_name = String::new();
         let mut file_data = Vec::new();
         let mut stream = None;
+        let mut model: Option<String> = None;
         let mut field_count = 0;
         loop {
             match multipart.next_field().await {
@@ -48,6 +50,17 @@ impl TranscriptionRequest {
                                 return Err(format!("Error parsing `multipart/form-data` request: {}", e));
                             }
                         }
+                    } else if name == "model" {
+                        match field.text().await {
+                            Ok(s) => {
+                                tracing::info!("Model field: {}", s);
+                                model = Some(s);
+                            }
+                            Err(e) => {
+                                tracing::error!("Error reading model field text for field #{}: {:?}", field_count, e);
+                                return Err(format!("Error parsing `multipart/form-data` request: {}", e));
+                            }
+                        }
                     } else {
                         // Log unknown fields
                         match field.text().await {
@@ -64,13 +77,16 @@ impl TranscriptionRequest {
             }
         }
 
-        tracing::info!("Parsed request: file_name={}, file_data_size={}, stream={:?}, fields={}",
-                       file_name, file_data.len(), stream, field_count);
+        tracing::info!("Parsed request: file_name={}, file_data_size={}, stream={:?}, model={:?}, fields={}",
+                       file_name, file_data.len(), stream, model, field_count);
+
+        let model = model.ok_or_else(|| "Missing `model` field in request".to_string())?;
 
         Ok(Self {
             file_name,
             file_data,
             stream,
+            model,
         })
     }
 }
@@ -86,4 +102,18 @@ impl From<crate::inference::TranscriptionResult> for TranscriptionResponse {
             text: result.text,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelListResponse {
+    pub object: String,
+    pub data: Vec<ModelData>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelData {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub owned_by: String,
 }

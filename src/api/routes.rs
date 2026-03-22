@@ -16,6 +16,7 @@ pub fn create_router(state: AppState) -> Router {
   -F "file=@audio.wav" \
   -F "stream=false"</pre>
         "#)}))
+        .route("/v1/models", get(crate::api::list_models))
         .route("/v1/audio/transcriptions", post(transcribe))
         .route("/v1/audio/transcriptions/stream", post(transcribe_sse))
         .with_state(state)

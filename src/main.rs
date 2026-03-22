@@ -33,6 +33,7 @@ fn build_router(config: &config::Config) -> anyhow::Result<Router> {
     let state = api::AppState {
         inference_engine: std::sync::Arc::new(inference_engine),
         concurrency_limiter: std::sync::Arc::new(concurrency_limiter),
+        model_id: config.model_name.clone(),
     };
 
     let app = api::routes::create_router(state)

@@ -20,6 +20,30 @@ use sse::SseResponse;
 pub struct AppState {
     pub inference_engine: Arc<InferenceEngine>,
     pub concurrency_limiter: Arc<ConcurrencyLimiter>,
+    pub model_id: String,
+}
+
+pub async fn list_models(
+    State(state): State<AppState>,
+) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let response = types::ModelListResponse {
+        object: "list".to_string(),
+        data: vec![
+            types::ModelData {
+                id: state.model_id.clone(),
+                object: "model".to_string(),
+                created: now,
+                owned_by: "openai".to_string(),
+            }
+        ],
+    };
+
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 pub async fn transcribe(
@@ -35,6 +59,10 @@ pub async fn transcribe(
                 tracing::error!("Failed to parse multipart: {}", e);
                 AppError::InvalidFormat(e)
             })?;
+        
+        if req.model != state.model_id {
+            return Err(AppError::ModelMismatch { requested: req.model, server: state.model_id.clone() });
+        }
         
         tracing::info!("File name: {}", req.file_name);
         tracing::info!("File data size: {} bytes", req.file_data.len());
@@ -86,6 +114,11 @@ pub async fn transcribe_sse(
         let req = TranscriptionRequest::from_multipart(request)
             .await
             .map_err(|e| AppError::InvalidFormat(e))?;
+            
+        if req.model != state.model_id {
+            return Err(AppError::ModelMismatch { requested: req.model, server: state.model_id.clone() });
+        }
+            
         validate_wav_format(&req.file_name)?;
         let audio_data = extract_audio_data(&req.file_data)?;
 
@@ -125,6 +158,8 @@ pub enum AppError {
     InferenceError(String),
     #[error("Concurrency limit reached")]
     ConcurrencyLimit,
+    #[error("Model mismatch: requested '{requested}', server configured with '{server}'")]
+    ModelMismatch { requested: String, server: String },
 }
 
 impl IntoResponse for AppError {
@@ -134,6 +169,7 @@ impl IntoResponse for AppError {
             AppError::AudioError(_) => StatusCode::BAD_REQUEST,
             AppError::InferenceError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::ConcurrencyLimit => StatusCode::TOO_MANY_REQUESTS,
+            AppError::ModelMismatch { .. } => StatusCode::BAD_REQUEST,
         };
 
         let error_response = OpenAIErrorResponse {

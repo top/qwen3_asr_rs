@@ -91,9 +91,30 @@ Environment variables:
 | `PORT` | 8080 | Server port |
 | `CONCURRENCY_LIMIT` | 2 | Max concurrent requests |
 | `MODEL_PATH` | models | Path to model directory |
+| `MODEL_NAME` | *(auto)* | Explicit model name for API validation (defaults to `MODEL_PATH` basename) |
 | `CUDA_DEVICE` | true | Use CUDA device |
 
 ## API Endpoints
+
+### GET /v1/models
+
+Lists the currently available model (determined by `MODEL_NAME` or `MODEL_PATH`).
+
+**Response (JSON):**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "Qwen3-ASR-0.6B",
+      "object": "model",
+      "created": 1711100000,
+      "owned_by": "openai"
+    }
+  ]
+}
+```
 
 ### POST /v1/audio/transcriptions
 
@@ -102,7 +123,7 @@ Environment variables:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | file | Yes | WAV audio file |
-| `model` | string | No | Model name (default: qwen3-asr-0.6B) |
+| `model` | string | Yes | Model name (MUST match `MODEL_NAME` or `MODEL_PATH` basename) |
 | `language` | string | No | Language code (e.g., "en", "zh") |
 | `prompt` | string | No | Contextual prompt |
 | `response_format` | string | No | "json" or "text" |
@@ -136,9 +157,10 @@ cargo build
 # Run server
 cargo run
 
-# Test with curl
+# Test with curl (assuming MODEL_NAME=Qwen3-ASR-0.6B)
 curl -X POST http://localhost:8080/v1/audio/transcriptions \
   -F "file=@audio.wav" \
+  -F "model=Qwen3-ASR-0.6B" \
   -F "language=en"
 ```
 
