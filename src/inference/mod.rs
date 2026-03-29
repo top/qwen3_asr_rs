@@ -1,6 +1,5 @@
 use anyhow::Result;
 use qwen3_asr::{AsrInference, TranscribeOptions};
-use std::sync::Arc;
 use tracing::info;
 
 use crate::config::Config;
@@ -10,7 +9,7 @@ pub struct TranscriptionResult {
 }
 
 pub struct InferenceEngine {
-    engine: Arc<AsrInference>,
+    engine: AsrInference,
 }
 
 impl InferenceEngine {
@@ -24,18 +23,14 @@ impl InferenceEngine {
             .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))?;
 
         info!("Model loaded successfully");
-        Ok(Self {
-            engine: Arc::new(engine),
-        })
+        Ok(Self { engine })
     }
 
     pub fn transcribe(&self, audio_data: &[f32]) -> Result<TranscriptionResult> {
-        // Handle empty audio data
         if audio_data.is_empty() {
             return Err(anyhow::anyhow!("No audio samples to transcribe"));
         }
 
-        // Handle very short audio (less than 0.1 seconds at 16kHz)
         if audio_data.len() < 1600 {
             tracing::warn!(
                 "Very short audio: {} samples ({} seconds)",
@@ -52,7 +47,10 @@ impl InferenceEngine {
 
         let sample_rate = 16000;
         let segments = crate::audio::segment_audio(audio_data, sample_rate, 20.0);
-        info!("Audio segmented into {} chunks for VRAM optimization", segments.len());
+        info!(
+            "Audio segmented into {} chunks for VRAM optimization",
+            segments.len()
+        );
 
         let mut final_text = String::new();
 
@@ -71,12 +69,13 @@ impl InferenceEngine {
 
         info!("Transcription completed: {} chars", final_text.len());
 
-        Ok(TranscriptionResult {
-            text: final_text,
-        })
+        Ok(TranscriptionResult { text: final_text })
     }
 
-    pub fn init_streaming(&self, options: qwen3_asr::StreamingOptions) -> qwen3_asr::StreamingState {
+    pub fn init_streaming(
+        &self,
+        options: qwen3_asr::StreamingOptions,
+    ) -> qwen3_asr::StreamingState {
         self.engine.init_streaming(options)
     }
 
@@ -85,23 +84,23 @@ impl InferenceEngine {
         state: &mut qwen3_asr::StreamingState,
         samples: &[f32],
     ) -> Result<Option<TranscriptionResult>> {
-        let result = self.engine.feed_audio(state, samples)
+        let result = self
+            .engine
+            .feed_audio(state, samples)
             .map_err(|e| anyhow::anyhow!("Streaming feed failed: {}", e))?;
-        
-        Ok(result.map(|r| TranscriptionResult {
-            text: r.text,
-        }))
+
+        Ok(result.map(|r| TranscriptionResult { text: r.text }))
     }
 
     pub fn finish_streaming(
         &self,
         state: &mut qwen3_asr::StreamingState,
     ) -> Result<TranscriptionResult> {
-        let result = self.engine.finish_streaming(state)
+        let result = self
+            .engine
+            .finish_streaming(state)
             .map_err(|e| anyhow::anyhow!("Streaming finish failed: {}", e))?;
-        
-        Ok(TranscriptionResult {
-            text: result.text,
-        })
+
+        Ok(TranscriptionResult { text: result.text })
     }
 }

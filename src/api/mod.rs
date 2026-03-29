@@ -1,9 +1,9 @@
-pub mod routes;
 pub mod response;
+pub mod routes;
 pub mod sse;
 pub mod types;
 
-use axum::extract::{State, Multipart};
+use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use crate::concurrency::ConcurrencyLimiter;
 use crate::inference::InferenceEngine;
-use crate::audio::AudioProcessor;
-use types::{TranscriptionRequest, TranscriptionResponse};
-use response::{OpenAIErrorResponse, OpenAIError};
+
+use response::{OpenAIError, OpenAIErrorResponse};
 use sse::SseResponse;
+use types::{TranscriptionRequest, TranscriptionResponse};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -23,9 +23,7 @@ pub struct AppState {
     pub model_id: String,
 }
 
-pub async fn list_models(
-    State(state): State<AppState>,
-) -> Response {
+pub async fn list_models(State(state): State<AppState>) -> Response {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -33,25 +31,20 @@ pub async fn list_models(
 
     let response = types::ModelListResponse {
         object: "list".to_string(),
-        data: vec![
-            types::ModelData {
-                id: state.model_id.clone(),
-                object: "model".to_string(),
-                created: now,
-                owned_by: "openai".to_string(),
-            }
-        ],
+        data: vec![types::ModelData {
+            id: state.model_id.clone(),
+            object: "model".to_string(),
+            created: now,
+            owned_by: "openai".to_string(),
+        }],
     };
 
     (StatusCode::OK, Json(response)).into_response()
 }
 
-pub async fn transcribe(
-    State(state): State<AppState>,
-    request: Multipart,
-) -> Response {
+pub async fn transcribe(State(state): State<AppState>, request: Multipart) -> Response {
     tracing::info!("Received transcription request");
-    
+
     let result = async {
         let req = TranscriptionRequest::from_multipart(request)
             .await
@@ -59,23 +52,28 @@ pub async fn transcribe(
                 tracing::error!("Failed to parse multipart: {}", e);
                 AppError::InvalidFormat(e)
             })?;
-        
+
         if req.model != state.model_id {
-            return Err(AppError::ModelMismatch { requested: req.model, server: state.model_id.clone() });
+            return Err(AppError::ModelMismatch {
+                requested: req.model,
+                server: state.model_id.clone(),
+            });
         }
-        
+
         tracing::info!("File name: {}", req.file_name);
         tracing::info!("File data size: {} bytes", req.file_data.len());
-        
+
         validate_wav_format(&req.file_name)?;
         let audio_data = extract_audio_data(&req.file_data)?;
-        
+
         tracing::info!("Extracted {} audio samples", audio_data.len());
-        
+
         if audio_data.is_empty() {
-            return Err(AppError::AudioError("No audio samples extracted".to_string()));
+            return Err(AppError::AudioError(
+                "No audio samples extracted".to_string(),
+            ));
         }
-        
+
         if req.stream.unwrap_or(false) {
             return Ok(EitherResponse::Sse(SseResponse {
                 engine: state.inference_engine.clone(),
@@ -83,13 +81,19 @@ pub async fn transcribe(
                 audio_data,
             }));
         }
-        
-        let _guard = state.concurrency_limiter.acquire().await
+
+        let _guard = state
+            .concurrency_limiter
+            .acquire()
+            .await
             .map_err(|_| AppError::ConcurrencyLimit)?;
-        let result = state.inference_engine.transcribe(&audio_data)
+        let result = state
+            .inference_engine
+            .transcribe(&audio_data)
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
         Ok(EitherResponse::Json(TranscriptionResponse::from(result)))
-    }.await;
+    }
+    .await;
 
     match result {
         Ok(EitherResponse::Json(response)) => (StatusCode::OK, Json(response)).into_response(),
@@ -106,19 +110,19 @@ enum EitherResponse {
     Sse(SseResponse),
 }
 
-pub async fn transcribe_sse(
-    State(state): State<AppState>,
-    request: Multipart,
-) -> Response {
+pub async fn transcribe_sse(State(state): State<AppState>, request: Multipart) -> Response {
     let result: Result<SseResponse, AppError> = async {
         let req = TranscriptionRequest::from_multipart(request)
             .await
             .map_err(|e| AppError::InvalidFormat(e))?;
-            
+
         if req.model != state.model_id {
-            return Err(AppError::ModelMismatch { requested: req.model, server: state.model_id.clone() });
+            return Err(AppError::ModelMismatch {
+                requested: req.model,
+                server: state.model_id.clone(),
+            });
         }
-            
+
         validate_wav_format(&req.file_name)?;
         let audio_data = extract_audio_data(&req.file_data)?;
 
@@ -127,7 +131,8 @@ pub async fn transcribe_sse(
             limiter: state.concurrency_limiter.clone(),
             audio_data,
         })
-    }.await;
+    }
+    .await;
 
     match result {
         Ok(response) => response.into_response(),
@@ -137,15 +142,15 @@ pub async fn transcribe_sse(
 
 fn validate_wav_format(file_name: &str) -> Result<(), AppError> {
     if !file_name.ends_with(".wav") {
-        return Err(AppError::InvalidFormat("Only WAV format supported".to_string()));
+        return Err(AppError::InvalidFormat(
+            "Only WAV format supported".to_string(),
+        ));
     }
     Ok(())
 }
 
 fn extract_audio_data(file_data: &[u8]) -> Result<Vec<f32>, AppError> {
-    let audio_processor = AudioProcessor::new();
-    audio_processor.process_wav(file_data)
-        .map_err(|e| AppError::AudioError(e))
+    crate::audio::process_wav(file_data).map_err(AppError::AudioError)
 }
 
 #[derive(thiserror::Error, Debug)]

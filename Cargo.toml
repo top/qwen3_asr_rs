@@ -7,7 +7,7 @@ edition = "2021"
 # Web framework
 axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
-tower = { version = "0.4", features = ["limit"] }
+tower = { version = "0.4", features = ["limit", "util"] }
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 
 # Serialization
@@ -20,6 +20,8 @@ thiserror = "2.0"
 
 # Async streams
 futures = "0.3"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 # Logging
 tracing = "0.1"
