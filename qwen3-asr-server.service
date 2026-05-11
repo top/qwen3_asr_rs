@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Desktop/projects/qwen3-asr-rs/qwen3_asr_rs
+WorkingDirectory=%h/qwen3-asr/qwen3_asr_rs
 Environment="PORT=11435"
 Environment="CONCURRENCY_LIMIT=2"
-Environment="MODEL_PATH=%h/Desktop/projects/qwen3-asr-rs/Qwen3-ASR-0.6B"
+Environment="MODEL_PATH=%h/qwen3-asr/Qwen3-ASR-0.6B"
 Environment="CUDA_DEVICE=true"
 Environment="JETSON_TARGET=true"
 Environment="CUDA_HOME=/usr/local/cuda-12.6"
@@ -15,7 +15,7 @@ Environment="PATH=$CUDA_HOME/bin:$PATH"
 Environment="LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 Environment="CUDA_COMPUTE_CAP=87"
 Environment="RUST_LOG=info"
-ExecStart=%h/Desktop/projects/qwen3-asr-rs/qwen3_asr_rs/target/release/qwen3-asr-server
+ExecStart=%h/qwen3-asr/qwen3_asr_rs/target/release/qwen3-asr-server
 
 Restart=always
 RestartSec=5
