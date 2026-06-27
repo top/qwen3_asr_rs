@@ -10,11 +10,13 @@ use axum::Json;
 use std::sync::Arc;
 
 use crate::concurrency::ConcurrencyLimiter;
-use crate::inference::InferenceEngine;
+use crate::inference::{InferenceEngine, InferenceOptions};
 
 use response::{OpenAIError, OpenAIErrorResponse};
-use sse::SseResponse;
-use types::{TranscriptionRequest, TranscriptionResponse};
+use sse::{ChatSseResponse, SseResponse};
+use types::{
+    new_chat_response, ChatCompletionsRequest, TranscriptionRequest, TranscriptionResponse,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -79,6 +81,10 @@ pub async fn transcribe(State(state): State<AppState>, request: Multipart) -> Re
                 engine: state.inference_engine.clone(),
                 limiter: state.concurrency_limiter.clone(),
                 audio_data,
+                options: InferenceOptions {
+                    language: req.language.clone(),
+                    context_text: req.prompt.clone(),
+                },
             }));
         }
 
@@ -89,7 +95,13 @@ pub async fn transcribe(State(state): State<AppState>, request: Multipart) -> Re
             .map_err(|_| AppError::ConcurrencyLimit)?;
         let result = state
             .inference_engine
-            .transcribe(&audio_data)
+            .transcribe_with_options(
+                &audio_data,
+                &InferenceOptions {
+                    language: req.language,
+                    context_text: req.prompt,
+                },
+            )
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
         Ok(EitherResponse::Json(TranscriptionResponse::from(result)))
     }
@@ -130,12 +142,73 @@ pub async fn transcribe_sse(State(state): State<AppState>, request: Multipart) -
             engine: state.inference_engine.clone(),
             limiter: state.concurrency_limiter.clone(),
             audio_data,
+            options: InferenceOptions {
+                language: req.language,
+                context_text: req.prompt,
+            },
         })
     }
     .await;
 
     match result {
         Ok(response) => response.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+pub async fn chat_completions(
+    State(state): State<AppState>,
+    Json(request): Json<ChatCompletionsRequest>,
+) -> Response {
+    let parsed = match request.into_parsed_input() {
+        Ok(parsed) => parsed,
+        Err(e) => return AppError::InvalidFormat(e).into_response(),
+    };
+
+    if parsed.model != state.model_id {
+        return AppError::ModelMismatch {
+            requested: parsed.model,
+            server: state.model_id.clone(),
+        }
+        .into_response();
+    }
+
+    if parsed.stream {
+        return ChatSseResponse {
+            engine: state.inference_engine.clone(),
+            limiter: state.concurrency_limiter.clone(),
+            audio_data: parsed.audio_data,
+            options: InferenceOptions {
+                language: parsed.language,
+                context_text: parsed.context_text,
+            },
+            model_id: state.model_id.clone(),
+        }
+        .into_response();
+    }
+
+    let result = async {
+        let _guard = state
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|_| AppError::ConcurrencyLimit)?;
+
+        state
+            .inference_engine
+            .transcribe_with_options(
+                &parsed.audio_data,
+                &InferenceOptions {
+                    language: parsed.language,
+                    context_text: parsed.context_text,
+                },
+            )
+            .map_err(|e| AppError::InferenceError(e.to_string()))
+    }
+    .await;
+
+    match result {
+        Ok(r) => (StatusCode::OK, Json(new_chat_response(&state.model_id, r.text))).into_response(),
         Err(e) => e.into_response(),
     }
 }

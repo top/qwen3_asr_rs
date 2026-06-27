@@ -222,9 +222,9 @@ qwen3_asr_rs/
 
 ## Features
 
-- **OpenAI-compatible API**: Drop-in replacement for OpenAI-style Audio Transcriptions
+- **Dual OpenAI-style APIs**: `/v1/audio/transcriptions` and `/v1/chat/completions`
 - **WAV support**: Optimized for WAV format processing
-- **SSE streaming**: Real-time transcription with Server-Sent Events
+- **SSE streaming**: Real-time output for both transcriptions and chat completions
 - **CUDA acceleration**: NVIDIA GPU inference via Candle + `qwen3-asr`
 - **Concurrency control**: Reduces risk of GPU OOM on small devices
 - **Docker support**: Optional container workflow (see `Dockerfile`)
@@ -241,6 +241,11 @@ Lists the configured model (`MODEL_NAME` or basename of `MODEL_PATH`).
 
 Multipart form: `file` (WAV), `model` (must match configured name), optional `language`, `prompt`, `response_format`, `temperature`, `stream`.
 
+- `stream=false` (default): JSON response
+- `stream=true`: SSE response on the same endpoint
+- Legacy endpoint `POST /v1/audio/transcriptions/stream` remains available (SSE)
+- Current prompt behavior: when `prompt` is present, server uses internal streaming conditioning (`initial_text`) as a no-fork workaround.
+
 Example:
 
 ```bash
@@ -249,6 +254,42 @@ curl -X POST "http://127.0.0.1:11435/v1/audio/transcriptions" \
   -F "model=Qwen3-ASR-0.6B" \
   -F "language=en"
 ```
+
+### `POST /v1/chat/completions`
+
+JSON body with `model`, `messages`, optional `stream`.
+
+- `stream=false` (default): standard chat completion JSON
+- `stream=true`: SSE chunks (`chat.completion.chunk`)
+- Audio input currently supports `messages[].content[]` blocks with `{"type":"audio_url","audio_url":{"url":"data:...base64..."}}`
+
+Example (non-stream):
+
+```bash
+curl -X POST "http://127.0.0.1:11435/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-ASR-0.6B",
+    "messages": [
+      {"role":"system","content":"Please keep punctuation concise."},
+      {"role":"user","content":[
+        {"type":"text","text":"language: en"},
+        {"type":"audio_url","audio_url":{"url":"data:audio/wav;base64,<BASE64_WAV>"}}
+      ]}
+    ]
+  }'
+```
+
+## Capability Matrix
+
+| Endpoint | Mode | Language | Prompt/Context |
+|---|---|---|---|
+| `/v1/audio/transcriptions` | JSON | Supported | Supported via streaming-conditioned fallback |
+| `/v1/audio/transcriptions` | SSE | Supported | Supported via `initial_text` |
+| `/v1/chat/completions` | JSON | Supported | Supported (system/user text merged into context) |
+| `/v1/chat/completions` | SSE | Supported | Supported (system/user text merged into context) |
+
+Note: prompt/context is currently implemented without forking `qwen3-asr` by routing through streaming conditioning when needed. Native sync prompt fields can be adopted later when upstream adds first-class support.
 
 ---
 

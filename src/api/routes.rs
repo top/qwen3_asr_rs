@@ -1,6 +1,6 @@
 use axum::{routing::{post, get}, Router, response::Html};
 
-use crate::api::{transcribe, transcribe_sse, AppState};
+use crate::api::{chat_completions, transcribe, transcribe_sse, AppState};
 
 pub fn create_router(state: AppState) -> Router {
     Router::new()
@@ -8,6 +8,7 @@ pub fn create_router(state: AppState) -> Router {
             <h1>qwen3-asr-server</h1>
             <p>API endpoints:</p>
             <ul>
+                <li>POST /v1/chat/completions - Chat completions with audio (JSON/SSE)</li>
                 <li>POST /v1/audio/transcriptions - Transcribe audio (JSON response)</li>
                 <li>POST /v1/audio/transcriptions/stream - Transcribe audio (SSE streaming)</li>
             </ul>
@@ -17,6 +18,7 @@ pub fn create_router(state: AppState) -> Router {
   -F "stream=false"</pre>
         "#)}))
         .route("/v1/models", get(crate::api::list_models))
+        .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/audio/transcriptions", post(transcribe))
         .route("/v1/audio/transcriptions/stream", post(transcribe_sse))
         .with_state(state)
